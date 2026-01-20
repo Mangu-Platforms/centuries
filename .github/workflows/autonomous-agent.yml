@@ -1,0 +1,36 @@
+name: Autonomous Code Agent
+on:
+  workflow_dispatch:
+    inputs:
+      feature_request:
+        description: "Feature to generate"
+        required: true
+        default: "Add a /health endpoint and basic service README under generated/"
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install openai PyGithub pytest
+
+      - name: Run agent (analyze + generate + PR)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          REPO: ${{ github.repository }}
+          OPENAI_MODEL: gpt-4o-mini
+          VERBOSE: "1"
+        run: |
+          python autonomous_agent.py run --feature "${{ inputs.feature_request }}"

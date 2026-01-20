@@ -1,0 +1,28 @@
+name: 'Autonomous Agent'
+description: 'AI Coding Agent that generates code, runs tests, and opens PRs.'
+inputs:
+  feature:
+    description: 'Feature to implement'
+    required: true
+  openai_api_key:
+    description: 'OpenAI API Key'
+    required: true
+  github_token:
+    description: 'GitHub Token'
+    required: true
+  openai_model:
+    description: 'OpenAI Model'
+    default: 'gpt-4o-mini'
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - run: pip install -r ${{ github.action_path }}/requirements.txt
+      shell: bash
+    - run: python ${{ github.action_path }}/autonomous_agent.py run --feature "${{ inputs.feature }}"
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        REPO: ${{ github.repository }}
+        OPENAI_MODEL: ${{ inputs.openai_model }}
