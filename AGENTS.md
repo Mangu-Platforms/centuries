@@ -2,37 +2,51 @@
 
 ## Cursor Cloud specific instructions
 
-### What this project is
-A single-file Python CLI tool (`autonomous_agent.py`) packaged as a composite GitHub
-Action (`action.yml`, `.github/workflows/autonomous-agent.yml`). It uses the OpenAI API
-(`openai`) and the GitHub API (`PyGithub`) to analyze a repo, generate code under
-`generated/`, run optional tests, and open a PR. There is no GUI and no web server.
+This repo contains two independent things:
 
-### Environment
-- Python 3.12 is used locally (CI pins 3.11). Dependencies live in `requirements.txt`
-  (`openai`, `PyGithub`, `pytest`) and are installed into a project venv at `./venv`
-  (gitignored). The startup update script refreshes this venv, so you normally don't
-  need to reinstall. Activate with `. venv/bin/activate`.
+1. **NEXUS full-stack app** (`apps/api`, `apps/web`) — the Social Media Aggregator
+   Platform built from `BRD-v1`. This is the primary product.
+2. **Autonomous Agent** (`autonomous_agent.py`) — the original Python GitHub Action.
 
-### Lint / test / build / run
-- Lint: no linter is configured. Use `python -m py_compile autonomous_agent.py` as a
-  syntax check.
-- Test: `python -m pytest -q`. There are currently no test files, so pytest exits with
-  code 5 ("no tests ran") — that is expected, not a failure.
-- Build: nothing to build (single script + composite action).
-- Run: `python autonomous_agent.py {analyze|generate|run|deploy} ...` (see the module
-  docstring for usage).
+### NEXUS full-stack app
 
-### Non-obvious gotchas
-- `main()` calls `Settings.from_env()` which REQUIRES `GITHUB_TOKEN`, `OPENAI_API_KEY`,
-  and `REPO` (e.g. `owner/name`); it raises `RuntimeError: Missing required env var: ...`
-  if any are absent. These are NOT preconfigured in the cloud VM — add them as Secrets to
-  run the real pipeline.
-- `AutonomousAgent` is constructed BEFORE argparse runs, and its constructor calls
-  `Github.get_repo(REPO)` (a network call). So even `--help` will fail without valid
-  credentials and network access. To exercise core logic offline, import the module and
-  call the pure functions directly (`summarize_repo`, `extract_json_object`, `safe_slug`,
-  `detect_language`, `build_arg_parser`).
-- Running `analyze`/`generate`/`run` makes live OpenAI + GitHub API calls (and `run`
-  force-pushes a branch and opens a PR on the target `REPO`). Do not run these against a
-  real repo unless that is the intent.
+Monorepo via npm workspaces. Node 20+ (developed on Node 22). Run everything from the
+repo root.
+
+- Install: `npm install` (handled by the startup update script).
+- Database: Prisma + **SQLite** for local dev (`apps/api/prisma/dev.db`, gitignored).
+  Production switches the datasource provider to `postgresql` (see `README.md`).
+- First-run setup (NOT in the update script — run once when the DB is missing):
+  - `cp apps/api/.env.example apps/api/.env`
+  - `cp apps/web/.env.example apps/web/.env.local`
+  - `npm run db:setup` — pushes the Prisma schema to SQLite and seeds the demo account.
+- Run both dev servers: `npm run dev` (API on `:4000`, web on `:3000`). Or individually:
+  `npm run dev:api` / `npm run dev:web`.
+- Lint/typecheck: `npm run lint` (API = `tsc --noEmit`, web = `next lint`).
+- Tests: `npm test` (API vitest suite under `apps/api/src/__tests__`).
+- Build: `npm run build`.
+- Demo account: `demo@nexus.app` / `password123`.
+
+Non-obvious notes:
+
+- **Demo connectors:** the four social platforms (Twitter, Threads, Bluesky, Mastodon)
+  are implemented as deterministic demo connectors in `apps/api/src/connectors/`. They
+  generate realistic feeds and simulate publishing so the app runs fully **without any
+  third-party API keys**. To integrate a real platform, implement `PlatformConnector`
+  and register it; nothing else needs to change.
+- After editing `prisma/schema.prisma` you must run `npm run -w @nexus/api prisma:generate`
+  (and `prisma db push`) — the generated client is what the API imports.
+- The web app reads the API base URL from `NEXT_PUBLIC_API_URL` (`apps/web/.env.local`,
+  default `http://localhost:4000`). CORS origins for the API are set via `CORS_ORIGIN`.
+- Prisma CLI prints a "major version upgrade available (7.x)" notice — it is informational;
+  the project is pinned to Prisma 6 and works as-is.
+
+### Autonomous Agent (Python)
+
+- Single-file CLI / composite GitHub Action. Deps in `requirements.txt`, installed into a
+  `./venv` by the update script. Lint = `python -m py_compile autonomous_agent.py`;
+  tests = `python -m pytest` (no tests yet, exit code 5 is expected).
+- `main()` requires `GITHUB_TOKEN`, `OPENAI_API_KEY`, and `REPO`, and constructs a GitHub
+  client (network call) before argparse — so even `--help` fails without valid creds. To
+  exercise logic offline, import the module and call its pure functions. Running
+  `analyze`/`generate`/`run` makes live OpenAI + GitHub calls (and `run` opens a PR).

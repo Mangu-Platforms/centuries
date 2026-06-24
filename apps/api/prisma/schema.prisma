@@ -1,0 +1,98 @@
+// NEXUS Social Media Aggregator - Prisma schema
+// Uses SQLite for zero-config local development. For production, switch the
+// datasource provider to "postgresql" and point DATABASE_URL at Postgres 15
+// (per the BRD). The application code is provider-agnostic.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  bio          String   @default("")
+  avatarUrl    String   @default("")
+  theme        String   @default("light")
+  createdAt    DateTime @default(now())
+
+  connections Connection[]
+  feedPosts   FeedPost[]
+  publishJobs PublishJob[]
+}
+
+model Connection {
+  id          String   @id @default(cuid())
+  userId      String
+  platform    String // twitter | threads | bluesky | mastodon
+  handle      String
+  displayName String   @default("")
+  instance    String   @default("") // mastodon instance, optional
+  status      String   @default("active") // active | expired | error
+  createdAt   DateTime @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feedPosts FeedPost[]
+
+  @@unique([userId, platform, handle])
+  @@index([userId])
+}
+
+model FeedPost {
+  id           String   @id @default(cuid())
+  userId       String
+  connectionId String?
+  platform     String
+  externalId   String
+  authorHandle String
+  authorName   String
+  authorAvatar String   @default("")
+  content      String
+  mediaUrls    String   @default("[]") // JSON array of image URLs
+  likeCount    Int      @default(0)
+  repostCount  Int      @default(0)
+  replyCount   Int      @default(0)
+  liked        Boolean  @default(false)
+  bookmarked   Boolean  @default(false)
+  isOwn        Boolean  @default(false) // true if authored by the user via cross-post
+  postedAt     DateTime @default(now())
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connection Connection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, postedAt])
+}
+
+model PublishJob {
+  id          String   @id @default(cuid())
+  userId      String
+  content     String
+  mediaUrls   String   @default("[]")
+  scheduledAt DateTime?
+  createdAt   DateTime @default(now())
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targets PublishTarget[]
+
+  @@index([userId, createdAt])
+}
+
+model PublishTarget {
+  id         String   @id @default(cuid())
+  jobId      String
+  platform   String
+  status     String   @default("pending") // pending | success | failed
+  externalId String   @default("")
+  error      String   @default("")
+  latencyMs  Int      @default(0)
+
+  job PublishJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
