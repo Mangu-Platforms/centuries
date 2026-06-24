@@ -1,0 +1,25 @@
+{
+  "name": "nexus-social-aggregator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NEXUS - Social Media Aggregator Platform (unified feed + cross-posting for Twitter, Threads, Bluesky, Mastodon)",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @nexus/api\" \"npm run dev -w @nexus/web\"",
+    "dev:api": "npm run dev -w @nexus/api",
+    "dev:web": "npm run dev -w @nexus/web",
+    "build": "npm run build -w @nexus/api && npm run build -w @nexus/web",
+    "lint": "npm run lint -w @nexus/api && npm run lint -w @nexus/web",
+    "test": "npm run test -w @nexus/api",
+    "db:setup": "npm run db:setup -w @nexus/api",
+    "seed": "npm run seed -w @nexus/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

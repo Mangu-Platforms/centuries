@@ -5,3 +5,19 @@ generated/
 venv/
 .pytest_cache/
 .mypy_cache/
+
+# Node / full-stack app
+node_modules/
+.next/
+dist/
+build/
+coverage/
+*.log
+.env
+.env.local
+.DS_Store
+
+# Prisma / SQLite dev database
+apps/api/prisma/*.db
+apps/api/prisma/*.db-journal
+apps/api/prisma/migrations/dev.db
