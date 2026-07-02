@@ -46,86 +46,148 @@ export default function ConnectionsPage() {
   };
 
   const meta = PLATFORM_META[platform];
+  const connectedIds = new Set(connections.map((c) => c.platform));
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Connections</h1>
-        <p className="text-sm text-slate-500">Connect your social accounts to aggregate and cross-post.</p>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Connections</h1>
+        <p className="mt-1 text-sm text-slate-500">Connect your social accounts to aggregate and cross-post.</p>
       </div>
 
-      <section className="card p-5">
+      <section className="card p-5 sm:p-6">
         <h2 className="mb-4 font-bold text-slate-900 dark:text-white">Connect a platform</h2>
-        <div className="mb-4 flex flex-wrap gap-2">
-          {PLATFORM_ORDER.map((p) => (
-            <button
-              key={p}
-              onClick={() => setPlatform(p)}
-              className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition ${
-                platform === p
-                  ? "border-brand-500 bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
-                  : "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300"
-              }`}
-            >
-              <PlatformGlyph platform={p} className="h-5 w-5 text-[10px]" />
-              {PLATFORM_META[p].name}
-            </button>
-          ))}
+
+        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {PLATFORM_ORDER.map((p) => {
+            const active = platform === p;
+            const isConnected = connectedIds.has(p);
+            return (
+              <button
+                key={p}
+                onClick={() => setPlatform(p)}
+                className={`relative flex flex-col items-center gap-2 rounded-2xl border p-4 transition ${
+                  active
+                    ? "border-brand-300 bg-brand-50/70 shadow-sm shadow-brand-600/10 dark:border-brand-700 dark:bg-brand-900/30"
+                    : "border-slate-200 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60"
+                }`}
+              >
+                {isConnected && (
+                  <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white" title="Connected">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" className="h-2.5 w-2.5">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  </span>
+                )}
+                <PlatformGlyph platform={p} className="h-10 w-10" />
+                <span
+                  className={`text-xs font-semibold ${
+                    active ? "text-brand-700 dark:text-brand-200" : "text-slate-600 dark:text-slate-300"
+                  }`}
+                >
+                  {PLATFORM_META[p].name}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
-        <form onSubmit={connect} className="space-y-3">
+        <form onSubmit={connect} className="space-y-4">
           <div>
             <label className="label">{platform === "bluesky" ? "Handle (e.g. you.bsky.social)" : "Handle"}</label>
-            <input className="input" value={handle} onChange={(e) => setHandle(e.target.value)} placeholder={platform === "mastodon" ? "@you@mastodon.social" : "@you"} />
+            <input
+              className="input"
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              placeholder={platform === "mastodon" ? "@you@mastodon.social" : "@you"}
+            />
           </div>
           {platform === "mastodon" && (
             <div>
               <label className="label">Instance (optional)</label>
-              <input className="input" value={instance} onChange={(e) => setInstance(e.target.value)} placeholder="mastodon.social" />
+              <input
+                className="input"
+                value={instance}
+                onChange={(e) => setInstance(e.target.value)}
+                placeholder="mastodon.social"
+              />
             </div>
           )}
           {platform === "bluesky" && (
             <div>
               <label className="label">App password (demo: any value)</label>
-              <input className="input" value={credential} onChange={(e) => setCredential(e.target.value)} placeholder="xxxx-xxxx-xxxx-xxxx" />
+              <input
+                className="input"
+                value={credential}
+                onChange={(e) => setCredential(e.target.value)}
+                placeholder="xxxx-xxxx-xxxx-xxxx"
+              />
             </div>
           )}
-          <p className="text-xs text-slate-500">
-            Auth method: <span className="font-medium">{meta.authLabel}</span> · Character limit: {meta.charLimit}
-          </p>
-          {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
-          {message && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p>}
+
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="badge bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              Auth: {meta.authLabel}
+            </span>
+            <span className="badge bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {meta.charLimit} character limit
+            </span>
+          </div>
+
+          {error && (
+            <p className="rounded-xl bg-rose-50 px-3.5 py-2.5 text-sm text-rose-700 ring-1 ring-inset ring-rose-600/15">
+              {error}
+            </p>
+          )}
+          {message && (
+            <p className="rounded-xl bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
+              {message}
+            </p>
+          )}
+
           <button type="submit" className="btn-primary" disabled={busy}>
             {busy ? "Connecting…" : `Connect ${meta.name}`}
           </button>
         </form>
       </section>
 
-      <section className="card p-5">
+      <section className="card p-5 sm:p-6">
         <h2 className="mb-4 font-bold text-slate-900 dark:text-white">
-          Your connections ({connections.length})
+          Your connections{" "}
+          <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+            {connections.length}
+          </span>
         </h2>
         {connections.length === 0 ? (
-          <p className="text-sm text-slate-500">No connections yet.</p>
+          <div className="rounded-xl border border-dashed border-slate-200 py-10 text-center dark:border-slate-700">
+            <p className="text-sm text-slate-500">No connections yet. Pick a platform above to get started.</p>
+          </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {connections.map((c) => (
-              <div key={c.id} className="flex items-center justify-between rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                <div className="flex items-center gap-3">
-                  <PlatformGlyph platform={c.platform} className="h-9 w-9 text-sm" />
+              <div
+                key={c.id}
+                className="flex items-center justify-between rounded-xl border border-slate-100 p-3.5 transition hover:border-slate-200 dark:border-slate-800 dark:hover:border-slate-700"
+              >
+                <div className="flex items-center gap-3.5">
+                  <PlatformGlyph platform={c.platform} className="h-10 w-10" />
                   <div>
                     <div className="font-semibold text-slate-800 dark:text-slate-100">{c.handle}</div>
-                    <div className="text-xs text-slate-500">
+                    <div className="mt-0.5 text-xs text-slate-500">
                       {PLATFORM_META[c.platform].name}
                       {c.instance ? ` · ${c.instance}` : ""}
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
+                <div className="flex items-center gap-2">
+                  <span className="badge-success">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                     {c.status}
                   </span>
-                  <button onClick={() => disconnect(c.id)} className="btn-ghost px-2 py-1 text-sm text-rose-600">
+                  <button
+                    onClick={() => disconnect(c.id)}
+                    className="btn-ghost px-2.5 py-1.5 text-sm text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10"
+                  >
                     Disconnect
                   </button>
                 </div>
