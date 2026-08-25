@@ -27,11 +27,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck + lint
-        run: npm run lint
-
+      # Must run before lint/build: `tsc` needs the generated Prisma client
+      # (model types) on disk, and `npm ci` alone only installs the
+      # @prisma/client package skeleton, not its generated types. `db:setup`
+      # (prisma db push + seed) generates the client as a side effect.
       - name: Set up dev database
         run: npm run db:setup -w @nexus/api
+
+      - name: Typecheck + lint
+        run: npm run lint
 
       - name: Unit tests
         run: npm test
