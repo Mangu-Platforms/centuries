@@ -49,7 +49,9 @@ Reproduced by deleting `node_modules/.prisma` and re-running `tsc` (same
 error signature), fixed by moving the DB-setup step before lint in
 `.github/workflows/ci.yml`, and re-verified by running the corrected step
 order end-to-end from a clean DB/generated-client state. Pushed as
-`0975f24`. Watching PR #4 for the next CI run to confirm green.
+`0975f24`. **Confirmed green** on the next push (`cb81286`): `build-and-test`
+(`conclusion: success`), plus CodeQL and the JS/TS + Python analyze checks,
+all passed. PR #4 is fully green and mergeable as of this addendum.
 
 ### 2026-08-25 — Session 1 (Phase A: foundation, complete)
 
