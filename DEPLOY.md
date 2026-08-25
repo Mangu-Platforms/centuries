@@ -4,6 +4,15 @@ Architecture: Next.js web on **Vercel** · Fastify API on **Railway** (SQLite on
 
 Everything below was verified locally against the exact build/start commands Railway will run.
 
+**Branch note:** this repo's default branch is currently
+`autonomous-agent-setup-6249396920522474145` (a leftover name from initial
+scaffolding) — there is no `main` branch yet. Point Railway/Vercel's
+"production branch" setting at whatever branch your team has actually
+designated as production (check the repo's default branch in GitHub
+settings before deploying; rename it there if you want `main` instead —
+that's a repo-admin action, not something to script). The examples below use
+the current default branch name; substitute your real one.
+
 ## Step 1 — Commit the deploy config
 
 Two files changed in this repo:
@@ -14,12 +23,12 @@ Two files changed in this repo:
 ```bash
 git add railway.json apps/api/package.json package-lock.json
 git commit -m "Add Railway deploy config for API"
-git push origin autonomous-agent-setup-6249396920522474145
+git push origin <your-production-branch>
 ```
 
 ## Step 2 — Deploy the API to Railway
 
-1. Go to https://railway.app → New Project → **Deploy from GitHub repo** → pick `redinc23/centuries`, branch `autonomous-agent-setup-6249396920522474145`.
+1. Go to https://railway.app → New Project → **Deploy from GitHub repo** → pick `Mangu-Platforms/centuries`, branch `<your-production-branch>`.
 2. Railway auto-detects `railway.json`. No build settings needed.
 3. **Add a volume**: service → right-click / Settings → Volumes → mount at `/data`. This is where SQLite lives — without it, your database resets on every deploy.
 4. **Set environment variables** on the service:
@@ -27,8 +36,17 @@ git push origin autonomous-agent-setup-6249396920522474145
    | Variable | Value |
    |---|---|
    | `DATABASE_URL` | `file:/data/nexus.db` |
-   | `JWT_SECRET` | `DWbAjucZk+Onn9XzSMWohCo4TDL5Yw/zlhdh4Uz0fcExDqwKQHQSaefM+WDuyq9X` (or generate your own) |
+   | `JWT_SECRET` | *(generate your own — never reuse an example value)* |
+   | `DATA_KEY` | *(generate your own — see below)* |
    | `CORS_ORIGIN` | *(set after Step 3 — your Vercel URL)* |
+
+   Generate `JWT_SECRET` and `DATA_KEY` locally, e.g.:
+   ```bash
+   openssl rand -base64 48   # JWT_SECRET
+   openssl rand -hex 32      # DATA_KEY (must be 32 bytes / 64 hex chars for AES-256-GCM)
+   ```
+   Never commit these values anywhere, including in this doc. Rotate
+   immediately if a value is ever pasted into a commit, issue, or chat log.
 
 5. Settings → Networking → **Generate Domain**. Note the URL (e.g. `https://nexus-api-production.up.railway.app`).
 6. Verify: `curl https://YOUR-RAILWAY-URL/health` → `{"status":"ok",...}`
@@ -41,9 +59,9 @@ Or just register a fresh account through the UI once the web app is live.
 
 ## Step 3 — Deploy the web app to Vercel
 
-1. https://vercel.com/new → import `redinc23/centuries`.
+1. https://vercel.com/new → import `Mangu-Platforms/centuries`.
 2. **Root Directory**: `apps/web` (important — it's a monorepo).
-3. Framework preset: Next.js (auto-detected). Production branch: `autonomous-agent-setup-6249396920522474145` (Settings → Git, since it's not `main`).
+3. Framework preset: Next.js (auto-detected). Production branch: `<your-production-branch>` (Settings → Git — set explicitly, since the repo has no `main`).
 4. Environment variable:
 
    | Variable | Value |
