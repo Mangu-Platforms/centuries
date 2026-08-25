@@ -35,6 +35,22 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-25 — Session 1 addendum: CI fix
+
+PR #4's first CI run (`build-and-test`) failed on `npm run lint`: dozens of
+TS errors (`Prisma.FeedPostWhereInput` missing, `Connection` fields typed as
+`{}`, implicit `any`s) that did **not** reproduce locally. Root cause: CI ran
+`npm run lint` immediately after `npm ci`, before the "Set up dev database"
+step — but `npm ci` only installs the `@prisma/client` package skeleton; the
+actual generated model types come from `prisma generate` (which `db:setup`'s
+`prisma db push` runs as a side effect). Locally this never surfaced because
+`db:setup` had already been run earlier in the session, well before lint.
+Reproduced by deleting `node_modules/.prisma` and re-running `tsc` (same
+error signature), fixed by moving the DB-setup step before lint in
+`.github/workflows/ci.yml`, and re-verified by running the corrected step
+order end-to-end from a clean DB/generated-client state. Pushed as
+`0975f24`. Watching PR #4 for the next CI run to confirm green.
+
 ### 2026-08-25 — Session 1 (Phase A: foundation, complete)
 
 **Summary:** First session of the 1242-hour campaign. Verified the repo
