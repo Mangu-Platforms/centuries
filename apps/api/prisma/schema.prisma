@@ -37,6 +37,15 @@ model Connection {
   status      String   @default("active") // active | expired | error
   createdAt   DateTime @default(now())
 
+  // Credentials below are encrypted at rest (AES-256-GCM via DATA_KEY, see
+  // src/lib/crypto.ts). Never populate these with plaintext tokens.
+  accessTokenEnc  String    @default("") // encrypted OAuth access token
+  refreshTokenEnc String    @default("") // encrypted OAuth refresh token
+  tokenExpiresAt  DateTime? // OAuth access token expiry, if applicable
+  appPasswordEnc  String    @default("") // encrypted app password (e.g. Bluesky)
+  scopes          String    @default("") // space-separated OAuth scopes granted
+  metadata        String    @default("{}") // JSON blob for connector-specific extras
+
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   feedPosts FeedPost[]
 
