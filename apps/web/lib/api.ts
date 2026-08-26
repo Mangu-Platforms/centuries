@@ -5,6 +5,7 @@ import type {
   Platform,
   PublishHistoryItem,
   PublishTargetResult,
+  SessionInfo,
   User,
 } from "./types";
 
@@ -122,6 +123,13 @@ export const api = {
 
   requestEmailVerification: () =>
     request<{ ok: boolean; alreadyVerified?: boolean }>("/api/auth/email/verify/request", { method: "POST" }),
+
+  sessions: () => request<{ sessions: SessionInfo[] }>("/api/auth/sessions"),
+
+  revokeSession: (id: string) => request<{ ok: boolean }>(`/api/auth/sessions/${id}`, { method: "DELETE" }),
+
+  logoutAllOtherSessions: () =>
+    request<{ ok: boolean; revoked: number }>("/api/auth/sessions/logout-all", { method: "POST" }),
 
   updateProfile: (data: Partial<Pick<User, "displayName" | "bio" | "theme">>) =>
     request<{ user: User }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(data) }),

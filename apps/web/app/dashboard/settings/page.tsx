@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import type { SessionInfo } from "@/lib/types";
 
 export default function SettingsPage() {
   return (
@@ -26,6 +27,15 @@ function SettingsPageInner() {
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
   const [sendingVerification, setSendingVerification] = useState(false);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [loggingOutAll, setLoggingOutAll] = useState(false);
+
+  const loadSessions = () => api.sessions().then((r) => setSessions(r.sessions)).catch(() => {});
+  useEffect(() => {
+    loadSessions();
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -80,6 +90,32 @@ function SettingsPageInner() {
       setVerifyError(err instanceof ApiError ? err.message : "Failed to send verification email");
     } finally {
       setSendingVerification(false);
+    }
+  };
+
+  const revokeSession = async (id: string) => {
+    setSessionsError(null);
+    setRevokingId(id);
+    try {
+      await api.revokeSession(id);
+      loadSessions();
+    } catch (err) {
+      setSessionsError(err instanceof ApiError ? err.message : "Failed to log out that session");
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  const logoutAllOthers = async () => {
+    setSessionsError(null);
+    setLoggingOutAll(true);
+    try {
+      await api.logoutAllOtherSessions();
+      loadSessions();
+    } catch (err) {
+      setSessionsError(err instanceof ApiError ? err.message : "Failed to log out other sessions");
+    } finally {
+      setLoggingOutAll(false);
     }
   };
 
@@ -153,6 +189,55 @@ function SettingsPageInner() {
         </div>
         {verifyError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{verifyError}</p>}
         {verifyMessage && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{verifyMessage}</p>}
+      </div>
+
+      <div className="card space-y-3 p-5">
+        <div className="flex items-center justify-between">
+          <h2 className="font-bold text-slate-900 dark:text-white">Active sessions</h2>
+          {sessions.length > 1 && (
+            <button
+              type="button"
+              onClick={logoutAllOthers}
+              className="btn-ghost px-3 py-1.5 text-sm text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10"
+              disabled={loggingOutAll}
+            >
+              {loggingOutAll ? "Logging out…" : "Log out all other sessions"}
+            </button>
+          )}
+        </div>
+        {sessionsError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{sessionsError}</p>}
+        <div className="space-y-2">
+          {sessions.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-center justify-between rounded-lg border border-slate-100 px-3.5 py-2.5 dark:border-slate-800"
+            >
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {s.userAgent || "Unknown device"}
+                  {s.current && (
+                    <span className="ml-2 rounded-full bg-brand-100 px-2 py-0.5 text-xs font-semibold text-brand-700 dark:bg-brand-900/50 dark:text-brand-200">
+                      This device
+                    </span>
+                  )}
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {s.ipAddress || "Unknown IP"} · {new Date(s.createdAt).toLocaleString()}
+                </p>
+              </div>
+              {!s.current && (
+                <button
+                  type="button"
+                  onClick={() => revokeSession(s.id)}
+                  className="btn-ghost px-2.5 py-1.5 text-sm text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10"
+                  disabled={revokingId === s.id}
+                >
+                  {revokingId === s.id ? "Logging out…" : "Log out"}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

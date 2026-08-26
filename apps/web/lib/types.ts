@@ -18,6 +18,14 @@ export interface Platform {
   auth: string;
 }
 
+export interface SessionInfo {
+  id: string;
+  userAgent: string;
+  ipAddress: string;
+  createdAt: string;
+  current: boolean;
+}
+
 export interface Connection {
   id: string;
   platform: PlatformId;
