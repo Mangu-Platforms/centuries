@@ -46,6 +46,67 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued a tenth time (Phase F6: Playwright smoke test + CI wiring; F4 backlog correction)
+
+**Summary:** Checked PR #5's CI on the E6 push before continuing — green.
+Picked **F6** (Playwright smoke test) next. While scoping F4 (light/dark
+theme) to see if it was still open, found it was already fully implemented
+pre-session — `darkMode: "class"` in the Tailwind config plus an existing
+`apps/web/lib/auth.tsx` effect already toggle the document's dark class off
+`user.theme`, and the settings page already has a working theme selector.
+Verified with a real reload + headless-browser screenshot rather than just
+trusting the code read. Corrected `docs/BACKLOG.md`'s F4 row from stale
+`TODO` to `DONE (pre-existing, verified 2026-08-26)` rather than re-doing
+already-finished work.
+
+**What shipped (F6):** `apps/web/playwright.config.ts` (new) — array
+`webServer` starting both the API dev server (`:4000/health`) and the web
+dev server (`:3000`), single `chromium` project via
+`devices["Desktop Chrome"]` with an optional `PLAYWRIGHT_CHROMIUM_PATH`
+override for this sandbox's nonstandard browser path. `apps/web/e2e/smoke.spec.ts`
+(new) — one golden-path test against the real demo-connector stack (no
+mocks, no third-party credentials): register a fresh account → connect
+Twitter/X as a demo connection → feed loads real imported posts → compose
+and publish a post → publish history on the dashboard shows it. Found and
+fixed one locator bug during development: `getByRole("button", { name: /Twitter \/ X/ })`
+matched both the platform-selector button ("Twitter / X") and the
+"Connect Twitter / X" submit button — resolved with
+`{ name: "Twitter / X", exact: true }`. Verified passing twice locally on a
+fresh cold start (10.2s, then 9.3s), test-results/report artifacts cleaned
+up afterward. Added `@playwright/test` as an `apps/web` devDependency and a
+`test:e2e` script. Wired a new `e2e` job into `.github/workflows/ci.yml`,
+`needs: build-and-test` (so a browser install + full e2e run only happens
+once lint/unit tests/build already passed): installs Playwright's Chromium
+with `--with-deps`, runs `npm run test:e2e -w @nexus/web`, uploads the HTML
+report as a build artifact only `if: failure()`. Gitignored
+`apps/web/{test-results,playwright-report,blob-report}/`.
+
+**Commands run:** `npm run lint`, `npm test` (full 111-test API suite,
+unaffected by web-side changes), `npm run build` — all green. Local
+Playwright run (`npm run test:e2e -w @nexus/web`) passed twice in a row
+against fresh cold-start dev servers.
+
+**Files touched:** `apps/web/playwright.config.ts` (new),
+`apps/web/e2e/smoke.spec.ts` (new), `apps/web/package.json`,
+`apps/web/package-lock.json`, `.gitignore`, `.github/workflows/ci.yml`,
+`docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #5 is still open and fetch shows no divergence,
+then commit this slice (small reviewable commits: Playwright config +
+dependency, the smoke spec, the CI job, docs) and push. After F6, the
+remaining open items are E3 (media upload pipeline — the biggest lift left
+in Phase E), E4 (per-target status UI polish), E5 (Instagram char-limit
+preview — now understood to require standing up Instagram as a new
+platform from scratch, not a one-line `PLATFORM_META` tweak), and the rest
+of Phase F (F1 analytics, F2 platform-mirrored bookmarks/likes, F3
+empty-states/toasts — note `PostCard` already has optimistic UI w/ rollback
+for like/bookmark, so F3 may be partially done already and worth a scoping
+pass before assuming it's untouched, F5 landing page polish). Check the
+Parked/WAITING-ON-HUMAN section of `BACKLOG.md` for any new human-supplied
+credentials before picking the next phase.
+
 ### 2026-08-26 — Session 3 continued a ninth time (Phase E6: idempotency keys, plus fixing a test-suite flake my own test exposed)
 
 **Summary:** Checked PR #5's CI on the E2 push before continuing — green

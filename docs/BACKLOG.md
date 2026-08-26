@@ -81,9 +81,9 @@ multiple items at once.
 | F1 | Real analytics (success rate, latency, feed volume) | TODO | Depends on live connectors existing |
 | F2 | Bookmarks/likes mirrored to platform where possible | TODO | |
 | F3 | Empty states, error toasts, optimistic UI w/ rollback | TODO | |
-| F4 | Light/dark theme wired to `User.theme` | TODO | |
+| F4 | Light/dark theme wired to `User.theme` | DONE (pre-existing, verified 2026-08-26) | Already fully implemented before this session — not built this slice. Tailwind's `darkMode: "class"` plus an existing effect in `apps/web/lib/auth.tsx` toggles `document.documentElement.classList` based on `user.theme`, and the settings page already had a theme selector wired to `PATCH /api/auth/me`. Verified this session via a real reload + headless-browser screenshot (not just reading the code) that switching themes in settings persists across reload and actually repaints the UI. Correcting this entry from `TODO` since it was carried over stale. |
 | F5 | Landing page polish | TODO | No marketing rewrite |
-| F6 | Playwright smoke test | TODO | register → connect demo → feed → compose → history |
+| F6 | Playwright smoke test | DONE (2026-08-26) | `apps/web/e2e/smoke.spec.ts` + `apps/web/playwright.config.ts` — one golden-path test driven against the real demo-connector stack (both dev servers, real API calls, zero third-party credentials): register → connect Twitter/X as a demo connection → feed loads → compose + publish a post → publish history shows it. Config spins up both `apps/api` and `apps/web` dev servers via Playwright's array `webServer` option and tears them down after. Found and fixed one locator ambiguity: `getByRole("button", { name: /Twitter \/ X/ })` matched both the platform-selector button and the "Connect Twitter / X" submit button — fixed with `{ name: "Twitter / X", exact: true }`. Verified passing twice locally on a fresh cold start (10.2s, then 9.3s). Wired into CI as a new `e2e` job in `.github/workflows/ci.yml`, gated on `build-and-test` passing first (`npx playwright install --with-deps chromium`, then `npm run test:e2e -w @nexus/web`, uploading the HTML report as an artifact only on failure). `@playwright/test` added as a devDependency of `apps/web`; `test-results/`, `playwright-report/`, `blob-report/` gitignored. |
 
 ## Phase G — Production + agent hygiene
 
