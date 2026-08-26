@@ -28,11 +28,33 @@ model User {
   // passed — see lib/loginLockout.ts.
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
+  // Phase B2: null until the user completes the email verification flow.
+  emailVerifiedAt DateTime?
 
-  connections   Connection[]
-  feedPosts     FeedPost[]
-  publishJobs   PublishJob[]
-  refreshTokens RefreshToken[]
+  connections         Connection[]
+  feedPosts           FeedPost[]
+  publishJobs         PublishJob[]
+  refreshTokens       RefreshToken[]
+  verificationTokens  VerificationToken[]
+}
+
+// Phase B2: hashed, single-use tokens backing both password reset and email
+// verification. One model instead of two near-identical ones — purpose
+// discriminates them, and consumeVerificationToken() (lib/verificationTokens.ts)
+// always checks it, so a token issued for one flow can't be replayed against
+// the other even though tokenHash alone would already be globally unique.
+model VerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  purpose   String // "password_reset" | "email_verify"
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model RefreshToken {
