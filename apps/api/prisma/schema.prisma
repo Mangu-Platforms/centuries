@@ -22,9 +22,34 @@ model User {
   theme        String   @default("light")
   createdAt    DateTime @default(now())
 
-  connections Connection[]
-  feedPosts   FeedPost[]
-  publishJobs PublishJob[]
+  connections   Connection[]
+  feedPosts     FeedPost[]
+  publishJobs   PublishJob[]
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  // SHA-256 hash of the raw token (hex). The raw token itself only ever
+  // exists in the httpOnly cookie handed to the browser and the one-time
+  // response when it's issued/rotated — never stored, never logged.
+  // Refresh tokens are high-entropy random values, not user-chosen
+  // secrets, so a fast hash is appropriate here (unlike passwords).
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  // Set when this token was rotated into a newer one, so a revoked token
+  // being presented again (reuse after rotation) is a detectable signal
+  // of possible theft, not just "expired normally."
+  replacedByHash String?
+  userAgent      String   @default("") // for a future session-list UI (Phase B4)
+  ipAddress      String   @default("")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Connection {
