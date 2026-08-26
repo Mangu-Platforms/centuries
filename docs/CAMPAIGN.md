@@ -35,6 +35,130 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 2 continued (Phase C2: Mastodon OAuth)
+
+**Summary:** Same session as C1 above, continued after confirming PR #4 was
+green on the C1 commit. Picked Phase C2 next per the backlog order — Mastodon
+also needs no pre-registered developer app (NEXUS registers a per-instance
+OAuth app dynamically), so it's unblocked without any human input.
+
+**What shipped:**
+- Before writing any connector code, checked for a maintained Mastodon API
+  client on npm rather than hand-rolling raw fetch calls against Mastodon's
+  REST API (same reasoning as choosing `@atproto/api` for Bluesky). Found
+  `masto` (actively maintained, fully typed). Installed it and read its
+  actual `.d.ts` files — `AppsResource.create`, `TokenResource.create`,
+  `TimelinesHomeResource.list`, `StatusesResource.create`, the `Status`/
+  `Account`/`MediaAttachment` entity shapes — before writing any mapping
+  code, same rigor as C1. `tsc --noEmit` passed clean on the first attempt
+  for both new files.
+- `apps/api/src/lib/timelineImport.ts` (new) — extracted the "fetch a
+  connector's initial timeline, store it, catch a bad credential gracefully"
+  logic C1 added inline in `connections.ts` into a shared helper, since C2
+  needed the exact same logic from a second call site (the OAuth callback).
+  `connections.ts` now calls it too — net simplification, not just added
+  code.
+- `apps/api/src/connectors/mastodon.ts` — `PlatformConnector` via `masto`.
+  `fetchTimeline` strips Mastodon's HTML-encoded `status.content` down to
+  plain text (the web UI renders `FeedPost.content` as plain text, so this
+  has to happen here, not at render time), normalizes local accounts' bare
+  `acct` to a fully-qualified `@user@instance` handle, and extracts image
+  URLs from media attachments (video deferred, matching Phase D4's "images
+  first" plan). `publish` is text-only for now, matching the Bluesky/demo
+  precedent. Self-registers via `registerLiveConnector("mastodon", ...)`.
+- `apps/api/src/routes/mastodonAuth.ts` (new) — the OAuth 2.0
+  authorization-code flow:
+  - `POST /api/connections/mastodon/register` (authenticated): dynamically
+    registers a NEXUS OAuth app on the user-supplied instance
+    (`POST /api/v1/apps`), then returns an `authorizeUrl` for the browser to
+    navigate to.
+  - `GET /api/connections/mastodon/callback` (deliberately **not**
+    authenticated — the instance redirects the user's *browser* here, which
+    can't carry a Bearer header): exchanges the authorization code for an
+    access token, calls `verify_credentials` to get the real handle, creates
+    the `Connection` (token encrypted via the existing `lib/crypto.ts`),
+    imports the initial timeline via the new shared helper, and redirects
+    back to the web app with a success or error query param.
+  - The interesting design point: rather than adding a new "pending OAuth
+    attempt" DB table to bridge the register→callback gap, the state that
+    bridges them (user id, instance, the dynamically-issued client
+    id/secret, an issue timestamp) is JSON-encoded and encrypted with the
+    same `DATA_KEY`-backed AES-256-GCM as stored credentials, then carried
+    round-trip through the instance in the standard OAuth `state` param. No
+    schema change needed for this whole feature. A 10-minute TTL bounds a
+    stale/replayed state.
+- `apps/web`: `lib/api.ts` gained `mastodonRegister(instance)`.
+  `dashboard/connections/page.tsx` now has a real, working Mastodon connect
+  flow — enter an instance, get redirected to it, approve, land back with a
+  success or error banner (read from the callback's query params, then
+  stripped from the URL). Had to wrap the page in a `<Suspense>` boundary
+  because `useSearchParams()` requires one for static prerendering in
+  Next.js 14 App Router — verified the production build still statically
+  prerenders `/dashboard/connections` after the change (`npm run build`
+  confirmed, page still shows `○ (Static)`).
+- Tests: `mastodon.test.ts` (8) — connector mapping/HTML-stripping/handle
+  normalization/missing-credential refusal/publish, mocked `masto`.
+  `mastodonAuth.test.ts` (8) — both routes end-to-end via `app.inject`:
+  register's `authorizeUrl` shape and state opacity (asserted the raw client
+  secret never appears in the JSON response outside the encrypted state
+  blob), an unreachable-instance 400, register requires auth, callback happy
+  path (asserts the DB connection + encrypted token + imported feed posts),
+  tampered state, **expired state** (real 10-minute TTL check using an
+  actual past timestamp, not mocked time), instance-rejects-code, and
+  confirmed the callback route itself needs no Authorization header. **No
+  live network call to any Mastodon instance was made anywhere in this
+  session** — every test mocks `masto`; manual verification used only the
+  zero-credential demo path.
+
+**Commands run (all green):**
+- `npm install masto` (added `masto@^8.0.0`).
+- `npx tsc --noEmit -p apps/api/tsconfig.json` — clean on the first attempt,
+  twice (once after the connector, once after the routes).
+- `npx vitest run` — **43/43** tests green across 8 files (16 new: 8 in
+  `mastodon.test.ts`, 8 in `mastodonAuth.test.ts`).
+- `npm run lint -w @nexus/web && npm run build -w @nexus/web` — clean;
+  confirmed `/dashboard/connections` still prerenders statically after
+  adding `useSearchParams`.
+- `npm run lint && npm test && npm run build` (root, full) — all green
+  (see next entry for the exact final numbers after docs were added).
+
+**Blockers:** None for shipping the code. `C2a` (real end-to-end validation
+against a live instance) is parked `WAITING-ON-HUMAN` — genuinely low effort
+this time (click through a consent screen on any public instance, no
+developer app approval needed). One connectivity note: during the manual
+smoke test, `POST /api/connections/mastodon/register` was called against
+the real `mastodon.social` (anonymous, credential-free app registration —
+not a user login or a fabricated token, the same "register my OAuth app"
+step any real client does) to see how the error handling behaves against a
+genuine failure rather than a mock. It failed with a network/encoding error
+— this sandbox's outbound network is proxied and blocks arbitrary domains
+(same restriction hit earlier fetching Mastodon's own docs), not a bug in
+the code: the failure was caught and returned as a clean `400` exactly as
+designed and unit-tested. This does **not** count as C2a validation — it
+confirms the error path works, not that the happy path does against a real
+instance.
+
+**Files touched (this sub-slice):** `apps/api/package.json`,
+`package-lock.json` (via `npm install masto`), `apps/api/src/config.ts`
+(`apiPublicUrl`, `webAppUrl`), `apps/api/src/lib/timelineImport.ts` (new),
+`apps/api/src/routes/connections.ts` (refactored to use the new helper),
+`apps/api/src/connectors/mastodon.ts` (new),
+`apps/api/src/routes/mastodonAuth.ts` (new), `apps/api/src/app.ts`,
+`apps/api/.env.example`, `apps/web/lib/api.ts`,
+`apps/web/app/dashboard/connections/page.tsx`,
+`apps/api/src/__tests__/mastodon.test.ts` (new),
+`apps/api/src/__tests__/mastodonAuth.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — C1 and C2 are
+both DONE (code-complete, live-unverified; C1a/C2a parked for a human).
+Take **B1–B3** next (refresh tokens, password reset/email verification,
+auth rate-limiting) — none need external credentials, and Phase B has been
+untouched since before Phase A. Alternatively, if a human has supplied a
+Bluesky app password or clicked through the Mastodon OAuth flow by then, do
+that validation pass (`C1a`/`C2a`) first — quick, and it either confirms
+Phase C's approach is solid before C3/C4 lean on the same pattern, or
+surfaces a real bug while it's still cheap to fix.
+
 ### 2026-08-26 — Session 2 (Phase C1: live Bluesky connector)
 
 **Summary:** First firing of the recurring campaign trigger (self-bind,

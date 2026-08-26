@@ -28,6 +28,8 @@ multiple items at once.
 | A6b | Propagate `code` through every route's manual validation error responses | TODO | Currently only the global handler (404, malformed body, uncaught throw) returns `code`/`requestId`; per-route `{error}` responses (register/login/connections/posts validation) don't yet. Low priority polish, not a correctness gap. |
 | C1a | Real end-to-end validation of the Bluesky connector against production bsky.social | WAITING-ON-HUMAN | The connector is unit-tested against the real `@atproto/api` types/shapes but has never been run against a live account — needs a human to supply a real Bluesky app password for a test account (same credential the charter's "first human work" section calls for). Until then, treat C1 as "code complete, live-unverified." |
 | C1b | Surface `connections.ts`'s new `warning` field in the web connect UI | TODO | Backend now returns `{ connection, importedPosts, warning? }` when a live credential is rejected (connection kept with `status: "error"`); `apps/web/app/dashboard/connections/page.tsx` doesn't read `warning` yet. Natural to fold into C6 (connect/reconnect/disconnect, last-error UI) rather than a one-off. |
+| C2a | Real end-to-end validation of the Mastodon OAuth flow against a live instance | WAITING-ON-HUMAN | Register/callback/connector are unit- and route-tested with a mocked `masto` SDK, but the actual browser redirect dance (register → authorize on a real instance → approve → callback) has never run against a real Mastodon server. Needs a human to click through it once against a real (even freshly-created) account on any public instance — no developer app approval required, just a few clicks. |
+| C2b | Mastodon media upload, reply/repost, per-connection sync cadence | TODO | Same E3/D1 scope as Bluesky — not connector-specific, tracked at the phase level already. |
 
 ## Phase B — Auth hardening
 
@@ -44,7 +46,7 @@ multiple items at once.
 | ID | Item | Status | Notes |
 | --- | --- | --- | --- |
 | C1 | Bluesky live connector (`@atproto/api`, app password) | DONE (2026-08-26) | `src/connectors/bluesky.ts`; registered via `registerLiveConnector`, imported once in `app.ts`. fetchTimeline + publish (text-only; images are Phase E3), stateless login-per-call. Real `@atproto/api` types verified against the installed package (`Agent`/`AtpAgent` classes, `getTimeline`/`post` signatures, `FeedViewPost`/`PostView`/image-embed shapes) — not guessed from memory. Unit-tested with a mocked `AtpAgent` (no live network calls made anywhere in this repo or by me during development — no Bluesky test account credential was available or used). `connections.ts`'s initial-fetch now catches a rejected live credential gracefully (connection kept, `status: "error"`, `warning` in the response) instead of 500ing. **End-to-end validation against the real Bluesky API still needs a human to supply a real test account app password** — the code is correct by construction against the SDK's types and documented shapes, but has not been run against production bsky.social. |
-| C2 | Mastodon OAuth 2.0 (user-supplied instance) | TODO | |
+| C2 | Mastodon OAuth 2.0 (user-supplied instance) | DONE (2026-08-26) | `src/connectors/mastodon.ts` (via the `masto` npm package — a maintained, typed Mastodon API client, same reasoning as `@atproto/api` for Bluesky) + `src/routes/mastodonAuth.ts` (`POST /api/connections/mastodon/register` dynamically registers a per-instance OAuth app and returns an `authorizeUrl`; `GET /api/connections/mastodon/callback`, unauthenticated by design since the instance redirects the browser, exchanges the code and creates the connection). No new DB table for pending OAuth attempts — the flow's state (userId, instance, dynamically-issued client id/secret, issuedAt) round-trips through the instance in an AES-256-GCM-encrypted `state` param using the same `DATA_KEY` as stored credentials, with a 10-minute TTL. Extracted `src/lib/timelineImport.ts` (shared with `connections.ts`) so the "fetch initial timeline, catch a bad credential gracefully" logic from C1 isn't duplicated. Web UI wired: `dashboard/connections` has a real OAuth connect flow for Mastodon (instance field → redirect → back with a success/error banner). Real masto SDK types verified against the installed package before writing any code. Unit + route-level tests only (mocked `masto`, no live network call); **real end-to-end validation against a live instance still needs a human** — parked as `C2a`. |
 | C3 | X API v2 OAuth 2.0 PKCE | WAITING-ON-HUMAN | Needs `TWITTER_CLIENT_ID`/`SECRET`; implement code path + env contract + UI state now, gate on env |
 | C4 | Instagram + Threads OAuth | WAITING-ON-HUMAN | Needs Meta developer app |
 | C5 | Retries, 429 backoff, token refresh, circuit breaker | TODO | Depends on C1/C2 existing |
@@ -96,10 +98,19 @@ multiple items at once.
 
 ## Parked / WAITING-ON-HUMAN
 
+- **C1a (Bluesky live validation)** — code-complete, unit-tested against real
+  SDK types, never run against a live account. Needs a Bluesky app password
+  for a test account.
+- **C2a (Mastodon live validation)** — code-complete, unit- and route-tested
+  against a mocked SDK, never clicked through against a real instance. Needs
+  a human to run the actual OAuth redirect once against any public instance
+  — no developer app registration required (NEXUS registers its own
+  per-instance), just a few clicks through the consent screen.
 - **C3 (X/Twitter)** — needs a Twitter developer app (`TWITTER_CLIENT_ID`,
   `TWITTER_CLIENT_SECRET`). Code path, env contract, and "waiting on
   credentials" UI state should exist regardless.
 - **C4 (Instagram/Threads)** — needs a Meta developer app.
-- First human actions still owed (per the charter): a Bluesky app password for
-  a test account, a Mastodon test instance + OAuth app registration, then
-  X/Threads/Instagram developer apps when ready.
+- Updated human actions still owed (per the charter): a Bluesky app password
+  for a test account (C1a) and clicking through the Mastodon OAuth flow once
+  (C2a) are both now unblocked and low-effort; X/Threads/Instagram developer
+  apps (C3/C4) remain the higher-effort asks.
