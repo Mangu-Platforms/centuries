@@ -27,3 +27,6 @@ apps/api/prisma/migrations/dev.db
 apps/web/test-results/
 apps/web/playwright-report/
 apps/web/blob-report/
+
+# Locally-stored media uploads (Phase E3 — LocalDiskStorage's default dir)
+apps/api/uploads/
