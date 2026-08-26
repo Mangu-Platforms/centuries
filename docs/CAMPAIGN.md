@@ -46,6 +46,63 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued a fourth time (Phase B5: change password — Phase B complete)
+
+**Summary:** Same session as B1–B4 above. B5 was the last Phase B item;
+display name/bio/theme were already wired from before this session, so the
+only real gap was letting a logged-in user change their password directly
+(without going through B2's email-reset flow).
+
+**What shipped:**
+- **`POST /api/auth/change-password`** (authenticated, rate-limited 10/min,
+  in `routes/auth.ts`): verifies `currentPassword` via `bcrypt.compare`
+  before touching anything, updates `passwordHash` (cost 12, same as
+  register), then calls B4's `revokeAllForUserExcept` — keeping the session
+  making the request alive (the user just proved they control it) while
+  signing out every other session, same reasoning as B2's password-reset
+  flow. This is the third route this session to reuse B4's session
+  primitives (`findActiveSessionIdByRawToken` to identify "this session",
+  `revokeAllForUserExcept` to keep it alive while clearing the rest) rather
+  than reimplementing that logic a third time.
+- **Web:** a "Change password" card in `/dashboard/settings` (current /
+  new / confirm-new fields, client-side length + match checks before
+  hitting the API); `lib/api.ts` gained `changePassword()`.
+- **Tests:** `apps/api/src/__tests__/changePassword.test.ts` (new, 5
+  tests) — happy path end-to-end (old password stops working, new one
+  works), wrong current password rejected without changing anything, the
+  keep-current-revoke-others behavior (reusing the same pattern proven in
+  B4's own tests), auth required, new password under 8 characters rejected.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **86/86** across
+  13 files (5 new).
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean, all 10 routes still prerender.
+- Manual smoke test against a locally running API: `demo@nexus.app`
+  unaffected; registered a throwaway account, confirmed a wrong current
+  password is rejected (401) and the real password still works afterward,
+  then changed it with the correct current password and confirmed the old
+  password stopped working while the new one logged in. Deleted the
+  throwaway account and stopped the dev server afterward.
+
+**Blockers:** None. **Phase B (auth hardening) is now fully complete — B1
+through B5 all `DONE`.**
+
+**Files touched:** `apps/api/src/routes/auth.ts`,
+`apps/api/src/__tests__/changePassword.test.ts` (new), `apps/web/lib/api.ts`,
+`apps/web/app/dashboard/settings/page.tsx`, `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — Phase B is
+fully complete. Check the Parked/WAITING-ON-HUMAN section for whether a
+human has supplied any outstanding credentials (Twitter/Meta developer
+apps for C3/C4, a Bluesky app password for C1a, clicked through Mastodon's
+OAuth for C2a, or an email provider for B2a). If not — and there's no way
+for a session running inside this sandbox to check the actual production
+deployment's env vars, only what a human explicitly reports — **Phase D
+(feed quality)** is the natural next phase: D1 (a real sync worker; today
+Bluesky/Mastodon only fetch on connect, never on a cadence) is the biggest
+gap now that Phase C's two shipped connectors exist for it to matter.
+
 ### 2026-08-26 — Session 3 continued a third time (Phase B4: session list + logout-all, and a real bug caught by smoke testing)
 
 **Summary:** Same session as B1/B2/B3 above, continued straight through. B4
