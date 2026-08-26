@@ -61,6 +61,7 @@ function publicUser(u: {
   bio: string;
   avatarUrl: string;
   theme: string;
+  emailVerifiedAt: Date | null;
 }) {
   return {
     id: u.id,
@@ -69,6 +70,7 @@ function publicUser(u: {
     bio: u.bio,
     avatarUrl: u.avatarUrl,
     theme: u.theme,
+    emailVerifiedAt: u.emailVerifiedAt ? u.emailVerifiedAt.toISOString() : null,
   };
 }
 

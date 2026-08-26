@@ -7,6 +7,7 @@ import { config, PLATFORMS } from "./config.js";
 import { prisma } from "./db.js";
 import { registerAuth } from "./plugins/auth.js";
 import { authRoutes } from "./routes/auth.js";
+import { accountRecoveryRoutes } from "./routes/accountRecovery.js";
 import { connectionRoutes } from "./routes/connections.js";
 import { mastodonAuthRoutes } from "./routes/mastodonAuth.js";
 import { feedRoutes } from "./routes/feed.js";
@@ -92,6 +93,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.get("/api/platforms", async () => ({ platforms: Object.values(PLATFORMS) }));
 
   await app.register(authRoutes);
+  await app.register(accountRecoveryRoutes);
   await app.register(connectionRoutes);
   await app.register(mastodonAuthRoutes);
   await app.register(feedRoutes);
