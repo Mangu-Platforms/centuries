@@ -174,10 +174,10 @@ export const api = {
   bookmark: (id: string) =>
     request<{ post: FeedPost }>(`/api/feed/${id}/bookmark`, { method: "POST" }),
 
-  publish: (content: string, platforms: string[], mediaUrls: string[] = []) =>
+  publish: (content: string, platforms: string[], mediaUrls: string[] = [], idempotencyKey?: string) =>
     request<{ jobId: string; results: PublishTargetResult[] }>("/api/posts", {
       method: "POST",
-      body: JSON.stringify({ content, platforms, mediaUrls }),
+      body: JSON.stringify({ content, platforms, mediaUrls, idempotencyKey }),
     }),
 
   history: () => request<{ jobs: PublishHistoryItem[] }>("/api/posts/history"),

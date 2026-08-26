@@ -23,6 +23,13 @@ export function Composer({
   const [results, setResults] = useState<PublishTargetResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Generated once per mount — this component fully unmounts when the
+  // composer closes (see dashboard/layout.tsx's `{composerOpen && ...}`),
+  // so a fresh key is picked up next time it opens for a new post, while a
+  // retry within the same open session (a double-click, clicking "Post"
+  // again after a dropped response) reuses this one. The API returns the
+  // original result for a repeated key instead of publishing again.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
 
   const minLimit = selected.length
     ? Math.min(...selected.map((p) => PLATFORM_META[p].charLimit))
@@ -42,7 +49,7 @@ export function Composer({
     if (selected.length === 0) return setError("Select at least one platform.");
     setSubmitting(true);
     try {
-      const { results } = await api.publish(content.trim(), selected);
+      const { results } = await api.publish(content.trim(), selected, [], idempotencyKey);
       setResults(results);
       onPublished?.();
     } catch (e) {
