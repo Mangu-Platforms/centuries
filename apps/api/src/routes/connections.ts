@@ -88,20 +88,35 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     });
 
     // Pull an initial timeline from the connector so the feed is populated.
-    // hasCredentials gates live-connector use; with none registered yet for
-    // any platform this always resolves to the demo connector (Phase C
-    // fills these in one platform at a time).
+    // hasCredentials gates live-connector use — a platform with no live
+    // connector registered yet, or a connection with no stored credentials,
+    // always resolves to the demo connector (Phase C fills these in one
+    // platform at a time; see connectors/registry.ts).
     const hasCredentials = Boolean(connection.appPasswordEnc || connection.accessTokenEnc);
     const connector = getConnector(platform, hasCredentials);
-    const remote = await connector.fetchTimeline(
-      {
-        handle,
-        instance,
-        appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
-        accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
-      },
-      8,
-    );
+
+    let remote: Awaited<ReturnType<typeof connector.fetchTimeline>> = [];
+    let fetchError = "";
+    try {
+      remote = await connector.fetchTimeline(
+        {
+          handle,
+          instance,
+          appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
+          accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+        },
+        8,
+      );
+    } catch (err) {
+      // A live connector can reject a bad credential (wrong app password,
+      // network error, etc). Keep the connection so the user can see it
+      // failed and retry/reconnect (Phase C6), rather than 500ing the whole
+      // request — one bad credential must never crash the connect flow.
+      fetchError = err instanceof Error ? err.message : "Failed to fetch initial timeline";
+      await prisma.connection.update({ where: { id: connection.id }, data: { status: "error" } });
+      connection.status = "error";
+    }
+
     if (remote.length > 0) {
       await prisma.feedPost.createMany({
         data: remote.map((p) => ({
@@ -122,7 +137,11 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    return reply.code(201).send({ connection: publicConnection(connection), importedPosts: remote.length });
+    return reply.code(201).send({
+      connection: publicConnection(connection),
+      importedPosts: remote.length,
+      ...(fetchError ? { warning: `Connected, but could not fetch the initial timeline: ${fetchError}` } : {}),
+    });
   });
 
   app.delete("/api/connections/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
