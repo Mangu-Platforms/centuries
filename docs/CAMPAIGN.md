@@ -46,41 +46,69 @@ test or visible UI change.
 
 ## Session log
 
-### 2026-08-26 — Session 2, addendum 2: CodeQL findings on PR #5, fixed
+### 2026-08-26 — Session 2, addendum 2: CodeQL findings on PR #5, fixed (took two attempts)
 
 CodeQL ran on PR #5's push and flagged 3 high-severity findings, all in new
-C2 code — verified each, fixed, tested, replied on the review threads, and
-resolved them:
+C2 code:
 
 1. **Double-unescaping / incomplete sanitization** (`connectors/mastodon.ts`,
-   `stripHtml()`): entities were decoded *after* tags were stripped, so a
-   toot literally containing escaped `<script>` text (Mastodon
-   entity-escapes any literal `<`/`>` a user types) would survive the
-   tag-strip pass, then get unescaped back into literal, unstripped
-   `<script>` text in `RemotePost.content`. Not currently exploitable (the
-   web UI renders `content` as React text, which always escapes), but a
-   real defect and a footgun for any future consumer. Fixed by decoding
-   first, then stripping — the function's output can no longer contain a
-   literal `<`/`>` at all. Regression test added with the exact payload.
-2. **Missing rate limiting** (`routes/mastodonAuth.ts`, both handlers):
-   neither the register nor callback endpoint had any rate limiting.
-   Verified true — no rate limiting exists anywhere in the codebase yet
-   (Phase B3 is the tracked item for auth-routes-wide limiting). Added
+   `stripHtml()`, 2 alerts): entities were decoded *after* tags were
+   stripped, so a toot literally containing escaped `<script>` text
+   (Mastodon entity-escapes any literal `<`/`>` a user types) would survive
+   the tag-strip pass, then get unescaped back into literal, unstripped
+   `<script>` text in `RemotePost.content`.
+2. **Missing rate limiting** (`routes/mastodonAuth.ts`, both handlers, 1
+   alert): neither the register nor callback endpoint had any rate
+   limiting. Verified true — no rate limiting exists anywhere in the
+   codebase yet (Phase B3 is the tracked item for auth-routes-wide
+   limiting). Fixed correctly on the first attempt: added
    `@fastify/rate-limit` scoped narrowly to just these two new routes
-   (`global: false`, so nothing else is affected) rather than widening into
-   B3's territory: register at 5/min (before the auth check, since it
-   triggers a real outbound call regardless of token validity), callback at
-   10/min (its only guard, since it's deliberately unauthenticated).
-   Regression tests confirm the limit actually trips.
+   (`global: false`, so nothing else is affected) — register at 5/min
+   (before the auth check, since it triggers a real outbound call
+   regardless of token validity), callback at 10/min (its only guard,
+   since it's deliberately unauthenticated). Regression tests confirm the
+   limit actually trips. Pushed as `296ad1e`, stayed fixed.
+
+**First attempt at (1) was wrong.** Reordered the same hand-rolled
+`.replace()` chain (decode before strip instead of after) and pushed as
+`6f8779e`. Tests passed, so I resolved those two review threads — but
+CodeQL re-ran on the next push and flagged the *same two findings again*,
+just at the new line numbers. Reordering a regex chain doesn't satisfy a
+query built to distrust regex-based HTML processing categorically: even
+the reordered chain had a real residual bug (chained, separately-invoked
+`.replace()` calls can cascade-decode a double-encoded entity across
+steps), and more fundamentally, hand-rolled tag/entity handling can't be
+proven complete by a static analyzer no matter how it's arranged.
+
+**Actual fix** (`7c6b723`): stopped hand-rolling this. Replaced the regex
+chain with `sanitize-html` (parses with `htmlparser2`, a real HTML parser)
+using `allowedTags: []` to remove every tag. Its own output deliberately
+keeps HTML-significant characters entity-encoded (it's designed to produce
+text still safe to re-embed in HTML) — so a follow-up `decodeSafeEntities()`
+only decodes `&amp;`/`&quot;`/`&#39;`/`&apos;` in a *single* regex pass with
+one replacer callback, never `&lt;`/`&gt;`. The output can now never contain
+a literal `<` or `>` under any input encoding, by construction — and it no
+longer silently deletes a user's literal typed angle-bracket text either
+(it shows it back safely encoded instead, which the naive tag-strip
+approach would have destroyed). Updated the regression test to assert the
+new, correct expected output. **Confirmed via a fresh CI run on `7c6b723`**
+— all 4 checks (`CodeQL`, `build-and-test`, both `Analyze` jobs) completed
+`success` — before resolving the two review threads this time, not before.
+
+**Lesson for future sessions:** when CodeQL (or any static analyzer) flags
+hand-rolled string-processing security logic, don't assume a same-technique
+patch (reordering, adding one more `.replace()`) actually satisfies it —
+verify with a fresh scan on the actual pushed commit before resolving the
+thread, and if the same class of finding reappears after a fix, that's a
+signal to change *approach* (use a real, recognized library) rather than
+keep patching the same regex chain.
 
 Commands: `npm test` 46/46, `npm run lint`, `npm run build` all green after
-the fixes. Pushed as `6f8779e` (sanitization) and `296ad1e` (rate limit).
-Replied on all three CodeQL review threads referencing the fix commits and
-resolved them.
+every fix pass. `sanitize-html` + `@types/sanitize-html` added as
+dependencies.
 
-**Next step:** same as before — Phase B (auth hardening) is next. Watch
-PR #5 for CI going green on `296ad1e` and for any further review activity
-before considering this slice fully closed out.
+**Next step:** Phase B (auth hardening) is next — unblocked, no external
+credentials needed.
 
 ### 2026-08-26 — Session 2, addendum: PR #4 merged mid-flight, branch restarted, PR #5 opened
 
