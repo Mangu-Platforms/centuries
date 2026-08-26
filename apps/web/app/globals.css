@@ -55,6 +55,9 @@ body {
   .badge-danger {
     @apply badge bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/15 dark:bg-rose-500/10 dark:text-rose-400;
   }
+  .badge-pending {
+    @apply badge bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/15 dark:bg-amber-500/10 dark:text-amber-400;
+  }
   .section-title {
     @apply text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500;
   }

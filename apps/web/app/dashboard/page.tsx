@@ -161,11 +161,29 @@ export default function DashboardOverview() {
                 <p className="text-sm leading-relaxed text-slate-800 dark:text-slate-200">{job.content}</p>
                 <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                   <span className="text-slate-400">{new Date(job.createdAt).toLocaleString()}</span>
+                  {job.scheduledAt && (
+                    <>
+                      <span className="text-slate-300 dark:text-slate-600">·</span>
+                      <span className="text-slate-400">
+                        Scheduled for {new Date(job.scheduledAt).toLocaleString()}
+                      </span>
+                    </>
+                  )}
                   <span className="text-slate-300 dark:text-slate-600">·</span>
                   {job.targets.map((t) => (
-                    <span key={t.platform} className={t.status === "success" ? "badge-success" : "badge-danger"}>
+                    <span
+                      key={t.platform}
+                      className={
+                        t.status === "success" ? "badge-success" : t.status === "pending" ? "badge-pending" : "badge-danger"
+                      }
+                    >
                       <PlatformGlyph platform={t.platform} className="h-3.5 w-3.5" />
-                      {PLATFORM_META[t.platform].name} {t.status === "success" ? "✓" : "✕"}
+                      {PLATFORM_META[t.platform].name}{" "}
+                      {t.status === "success"
+                        ? `✓ ${(t.latencyMs / 1000).toFixed(1)}s`
+                        : t.status === "pending"
+                          ? "· Pending"
+                          : `✕ ${t.error || "Failed"}`}
                     </span>
                   ))}
                 </div>
