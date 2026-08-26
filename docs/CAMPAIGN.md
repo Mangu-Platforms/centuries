@@ -15,9 +15,20 @@ first, every session, before touching code.
    exceptions.
 6. Confirm the demo account (`demo@nexus.app` / `password123`) still logs in
    and demo connectors still work with zero third-party keys.
-7. Commit in small, reviewable commits. Push to
-   `claude/nexus-production-build-s6p5hz`. Open the draft PR if none exists
-   yet for this branch, otherwise it updates automatically.
+7. **Before pushing**, check whether the branch's PR is still open
+   (`list_pull_requests` filtered to this branch). A human can merge it out
+   from under you mid-session — this actually happened in session 2 (see
+   below): PR #4 got merged at its then-current head while Phase C2 work was
+   still in flight on the same branch, so those commits landed on a branch
+   whose PR was already closed. If that's the state you find:
+   fetch the new default branch, `git rebase --onto origin/<default> <old-PR-head> claude/nexus-production-build-s6p5hz`
+   to replay your unmerged commits onto the new base (never discard them),
+   re-run the full verification suite from that rebased state (not just
+   trust the pre-rebase run), `git push --force-with-lease`, and open a new
+   PR — the old one is finished and can't be reused. Then commit in small,
+   reviewable commits and push to `claude/nexus-production-build-s6p5hz`.
+   Open the draft PR if none exists yet for this branch, otherwise it
+   updates automatically.
 8. Flip the backlog item to `DONE` (or `WAITING-ON-HUMAN` / `BLOCKED` with a
    one-line reason) in `docs/BACKLOG.md`.
 9. Append a new entry below in **reverse-chronological order** (newest on
@@ -34,6 +45,59 @@ test or visible UI change.
 ---
 
 ## Session log
+
+### 2026-08-26 — Session 2, addendum: PR #4 merged mid-flight, branch restarted, PR #5 opened
+
+**What happened:** While Phase C2 (Mastodon OAuth) was still being built on
+`claude/nexus-production-build-s6p5hz`, @redinc23 marked
+[PR #4](https://github.com/Mangu-Platforms/centuries/pull/4) ready for
+review and merged it directly — capturing only what was on the branch at
+that moment (Phase A + C1, head `6db9f3c`). This session kept working and
+pushed 5 more commits (Phase C2) to the same branch afterward, which never
+became part of that merge — they were orphaned relative to the now-closed
+PR. Caught this via the queued `pull_request.ready_for_review` /
+`pull_request.closed` GitHub webhook notifications (delivery was delayed;
+by the time they were read, several more commits and a PR description
+update had already happened).
+
+**What I did about it**, per the git-operations rule for a merged
+designated-branch PR:
+1. Fetched the new default branch tip (`e0878cc`, the merge commit) and
+   confirmed `6db9f3c` (PR #4's merged head) is its ancestor.
+2. `git rebase --onto origin/autonomous-agent-setup-6249396920522474145
+   6db9f3c claude/nexus-production-build-s6p5hz` — replayed the 5 unmerged
+   Phase C2 commits onto the new base. Clean rebase, no conflicts (expected:
+   the merge commit's tree matches `6db9f3c`'s tree exactly since nothing
+   else landed on the default branch in between).
+3. Re-ran the **full** verification suite from the rebased state — fresh
+   `npm install`, `db:setup`, `lint`, `test` (43/43), `build` — rather than
+   trusting the pre-rebase run, since a rebase can in principle change
+   what's actually being tested even when the diff looks identical.
+4. `git push --force-with-lease origin claude/nexus-production-build-s6p5hz`
+   — safe here per the git-operations rule (rebasing kept commits onto a
+   new base, not discarding history).
+5. Opened [PR #5](https://github.com/Mangu-Platforms/centuries/pull/5) for
+   the rebased branch (PR #4 is closed/merged and can't be reused) with a
+   summary explaining the split, and subscribed to its activity.
+6. Corrected PR #4's title/description — it had briefly (and incorrectly)
+   claimed Phase C2 was included, since GitHub still allows editing a
+   merged PR's body after the fact and that edit happened before this
+   session read the merge notification. Fixed it to describe only what
+   actually merged (Phase A + C1), with a note pointing to PR #5.
+7. Added a step to this file's own "Operating loop" above (step 7) so a
+   future session checks for this situation *before* pushing, not after.
+
+**Files touched:** none beyond the rebase itself (no content changes — the
+5 commits' diffs are identical to what they were before rebasing, only
+their base commit changed) plus this `CAMPAIGN.md` entry and the operating
+loop amendment.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — same as
+before this addendum: Phase B (auth hardening) is next, unblocked. Also
+worth a periodic check on PR #5's review state, the same way this happened
+to PR #4 — a human may merge it directly at any point, so re-check
+`list_pull_requests` for this branch before pushing further work, not just
+at the start of a session.
 
 ### 2026-08-26 — Session 2 continued (Phase C2: Mastodon OAuth)
 
