@@ -1,7 +1,15 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { config } from "../config.js";
+import {
+  issueRefreshToken,
+  revokeRefreshToken,
+  rotateRefreshToken,
+  REFRESH_COOKIE_NAME,
+  REFRESH_COOKIE_PATH,
+} from "../lib/refreshTokens.js";
 
 const registerSchema = z.object({
   email: z.string().email(),
@@ -13,6 +21,37 @@ const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
+
+// Access tokens are short-lived JWTs (Phase B1): the long-lived credential
+// is now the refresh token below, kept out of JS entirely (httpOnly
+// cookie) so an XSS bug can only steal a token that expires in minutes,
+// not one valid for days.
+const ACCESS_TOKEN_TTL = "15m";
+// Matches lib/refreshTokens.ts's own TTL — kept as a separate constant
+// here since the cookie's Max-Age and the token's server-side expiry are
+// conceptually different settings that happen to need the same value.
+const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+function refreshCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: config.isProd,
+    // Production is cross-origin by design (Vercel web + Railway API, per
+    // DEPLOY.md), which requires SameSite=None — and browsers require
+    // Secure whenever SameSite=None is set. Local dev has no HTTPS, so it
+    // uses Lax instead; that still works because same-site cookie rules
+    // only look at the registrable domain, not the port, and the web/API
+    // dev servers are both on localhost.
+    sameSite: config.isProd ? ("none" as const) : ("lax" as const),
+    path: REFRESH_COOKIE_PATH,
+    maxAge: REFRESH_COOKIE_MAX_AGE_SECONDS,
+  };
+}
+
+function requestMeta(request: FastifyRequest): { userAgent: string; ipAddress: string } {
+  const userAgent = request.headers["user-agent"];
+  return { userAgent: typeof userAgent === "string" ? userAgent : "", ipAddress: request.ip };
+}
 
 function publicUser(u: {
   id: string;
@@ -30,6 +69,18 @@ function publicUser(u: {
     avatarUrl: u.avatarUrl,
     theme: u.theme,
   };
+}
+
+/** Issues a fresh access token + refresh token pair for a just-authenticated user. */
+async function issueSession(
+  user: { id: string; email: string },
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<string> {
+  const accessToken = await reply.jwtSign({ sub: user.id, email: user.email }, { expiresIn: ACCESS_TOKEN_TTL });
+  const { rawToken } = await issueRefreshToken(user.id, requestMeta(request));
+  reply.setCookie(REFRESH_COOKIE_NAME, rawToken, refreshCookieOptions());
+  return accessToken;
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
@@ -50,7 +101,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       data: { email, passwordHash, displayName },
     });
 
-    const token = await reply.jwtSign({ sub: user.id, email: user.email }, { expiresIn: "7d" });
+    const token = await issueSession(user, request, reply);
     return reply.code(201).send({ token, user: publicUser(user) });
   });
 
@@ -66,8 +117,47 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: "Invalid email or password" });
     }
 
-    const token = await reply.jwtSign({ sub: user.id, email: user.email }, { expiresIn: "7d" });
+    const token = await issueSession(user, request, reply);
     return reply.send({ token, user: publicUser(user) });
+  });
+
+  // Silently exchanges the httpOnly refresh cookie for a new access token,
+  // rotating the refresh token in the process (see lib/refreshTokens.ts).
+  app.post("/api/auth/refresh", async (request, reply) => {
+    const rawToken = request.cookies[REFRESH_COOKIE_NAME];
+    if (!rawToken) return reply.code(401).send({ error: "No refresh token" });
+
+    const outcome = await rotateRefreshToken(rawToken, requestMeta(request));
+    if (outcome.status !== "ok") {
+      reply.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
+      const message =
+        outcome.status === "reused"
+          ? "Refresh token already used — all sessions for this account have been signed out"
+          : outcome.status === "expired"
+            ? "Refresh token expired, please log in again"
+            : "Invalid refresh token";
+      return reply.code(401).send({ error: message });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: outcome.userId } });
+    if (!user) {
+      reply.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
+      return reply.code(401).send({ error: "User not found" });
+    }
+
+    const accessToken = await reply.jwtSign({ sub: user.id, email: user.email }, { expiresIn: ACCESS_TOKEN_TTL });
+    reply.setCookie(REFRESH_COOKIE_NAME, outcome.issued.rawToken, refreshCookieOptions());
+    return reply.send({ token: accessToken, user: publicUser(user) });
+  });
+
+  // Not behind app.authenticate on purpose: a user with an already-expired
+  // access token must still be able to end their session. It only ever
+  // acts on the refresh cookie's own token, never on someone else's.
+  app.post("/api/auth/logout", async (request, reply) => {
+    const rawToken = request.cookies[REFRESH_COOKIE_NAME];
+    if (rawToken) await revokeRefreshToken(rawToken);
+    reply.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
+    return reply.send({ ok: true });
   });
 
   app.get("/api/auth/me", { preHandler: [app.authenticate] }, async (request, reply) => {

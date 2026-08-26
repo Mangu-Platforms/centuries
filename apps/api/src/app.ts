@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { config, PLATFORMS } from "./config.js";
@@ -39,6 +40,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
+  // No `secret` option: the refresh token cookie's value is itself a
+  // high-entropy opaque random token (see lib/refreshTokens.ts), so it
+  // doesn't need an additional signature — unlike a cookie that stored
+  // readable/guessable data.
+  await app.register(cookie);
   // global: false — this doesn't rate-limit every route by default, it only
   // makes the `app.rateLimit(...)` preHandler decorator available for
   // routes that opt in explicitly (see routes/mastodonAuth.ts). Blanket
