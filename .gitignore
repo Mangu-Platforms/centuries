@@ -22,3 +22,8 @@ coverage/
 apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 apps/api/prisma/migrations/dev.db
+
+# Playwright (Phase F6)
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/
