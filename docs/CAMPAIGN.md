@@ -46,6 +46,75 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued (Phase B3: rate limiting + account lockout)
+
+**Summary:** Same session as B1 above, continued straight through per the
+"B2 or B3 next, either order" note — picked B3 since `@fastify/rate-limit`
+is already a dependency and the exact preHandler pattern was already proven
+on the Mastodon OAuth routes from the CodeQL fix in Session 2, making it a
+fast, low-risk slice.
+
+**What shipped:**
+- **Per-IP rate limiting** on all three unauthenticated-entry auth routes,
+  using the same `{ preHandler: [app.rateLimit({...})] }` pattern as
+  `routes/mastodonAuth.ts`: `POST /api/auth/register` 5/min (spam account
+  creation), `/login` 10/min, `/refresh` 20/min (higher — legitimate use
+  fires this on every 401 across possibly several open tabs via the web
+  app's silent-refresh mechanism from B1, so it needs more headroom than a
+  login-brute-force budget).
+- **Per-account lockout** (`apps/api/src/lib/loginLockout.ts`, new) — the
+  part per-IP rate limiting can't cover: an attacker spreading guesses
+  across many IPs against one account. `User` gained `failedLoginAttempts`
+  (`Int @default(0)`) and `lockedUntil` (`DateTime?`). `checkLockout()` is a
+  pure read; `recordFailedLogin()` increments and locks for 15 minutes once
+  the count hits 5; `clearLockout()` resets both fields on a successful
+  login. Wired into `POST /api/auth/login` so the lockout check runs
+  *before* the password comparison — a locked account rejects even the
+  correct password with `423 { error, retryAfterSeconds }`, not just wrong
+  ones, otherwise an attacker could distinguish "wrong password" from
+  "locked" by trying the real password last. A login for an email with no
+  account is left as a plain `401` (nothing to lock, and no different from
+  today's existing behavior — doesn't change the "don't leak which emails
+  exist" property login already had).
+- **Tests:** `apps/api/src/__tests__/auth.test.ts` (new, 6 tests) — lockout
+  after 5 failed attempts rejects even a correct 6th password; a correct
+  login before the threshold clears the counter instead of ever locking;
+  a nonexistent-email login stays a plain 401; rate-limit trips confirmed
+  on register (6th of 6 rapid calls), login (11th of 11), and refresh (21st
+  of 21) — mirroring the exact assertion style already used for the
+  Mastodon OAuth rate-limit tests.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **62/62** across
+  10 files (6 new).
+- Root: `npm run lint` (API typecheck + `next lint`) clean, `npm run build`
+  clean (API + web, all 8 web routes still prerender).
+- Manual smoke test against a locally running API: confirmed
+  `demo@nexus.app`/`password123` still logs in normally (untouched by any
+  of this — 0 failed attempts on that account); registered a throwaway
+  test account, sent 5 failed logins (each a plain 401), then a 6th with
+  the *correct* password and confirmed it came back `423` with a
+  `retryAfterSeconds` of 900 (15 minutes) as designed. Deleted the
+  throwaway account and stopped the dev server afterward — no data left
+  behind.
+
+**Blockers:** None. No new env vars — the lockout thresholds are fixed
+constants (5 attempts / 15 minutes), not configurable via `.env`, consistent
+with how the refresh token TTLs in B1 are also fixed constants rather than
+env-driven.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/lib/loginLockout.ts` (new), `apps/api/src/routes/auth.ts`,
+`apps/api/src/__tests__/auth.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — B1 and B3 are
+both DONE. Take **B2** (password reset + email verification, provider
+interface with a console transport in dev — no real email provider needed
+to ship the code path) next; **B4** (session list / logout-all) is also
+unblocked now but reads better once B2 exists, since a session-list UI
+naturally sits next to other account-security settings. Neither needs
+external credentials.
+
 ### 2026-08-26 — Session 3 (Phase B1: rotating refresh tokens)
 
 **Summary:** Picked B1 next per the previous session's "next step" — auth
