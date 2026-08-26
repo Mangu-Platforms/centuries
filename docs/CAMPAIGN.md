@@ -46,6 +46,106 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued a third time (Phase B4: session list + logout-all, and a real bug caught by smoke testing)
+
+**Summary:** Same session as B1/B2/B3 above, continued straight through. B4
+was the last item in Phase B and was already fully unblocked — B1 left
+`userAgent`/`ipAddress` on every `RefreshToken` row specifically for this,
+and B3 gave the codebase a settings-page precedent for "account security"
+UI.
+
+**What shipped:**
+- **`lib/refreshTokens.ts`** gained four functions: `listActiveSessions`
+  (not-revoked, not-expired, newest first), `findActiveSessionIdByRawToken`
+  (resolves which session a raw cookie value belongs to — used to mark
+  "this device" without ever trusting a client-supplied session id),
+  `revokeSession` (ownership-scoped single revoke), `revokeAllForUserExcept`
+  ("log out all other devices", keeping one alive).
+- **`apps/api/src/routes/sessions.ts`** (new): `GET /api/auth/sessions`,
+  `DELETE /api/auth/sessions/:id`, `POST /api/auth/sessions/logout-all`. All
+  three authenticated; "current" is determined server-side from the
+  request's own refresh cookie, never from anything the client sends, so a
+  user can't spoof which row is "this device."
+- **Web:** `/dashboard/settings` gained an "Active sessions" card — device
+  (`userAgent`)/IP/date per row, a "This device" badge, a per-row "Log out"
+  button (hidden for the current row), and a "Log out all other sessions"
+  button (hidden when there's nothing else to log out). `lib/api.ts` gained
+  `sessions()`/`revokeSession()`/`logoutAllOtherSessions()`; `lib/types.ts`
+  gained `SessionInfo`.
+- **A real bug, caught by the manual smoke test, not by any unit test**:
+  after revoking one device's session via the new UI and then simulating
+  that device's next natural background refresh attempt (its browser still
+  holds the now-stale cookie — nothing tells it to clear it, since the
+  revocation happened from a *different* device), the *current* session
+  also got logged out. Traced it to B1's reuse-detection in
+  `rotateRefreshToken`: it treated presenting *any* already-revoked token as
+  a theft signal and revoked every session for the user, without
+  distinguishing *how* the token got revoked. That distinction matters: a
+  token revoked by **rotation** (`replacedByHash` set) being replayed really
+  is a stolen-cookie signal — a legitimate client only ever moves forward.
+  A token revoked **directly** — by logout, by this session's own
+  per-session revoke or logout-all, or by a B2 password reset — being
+  presented again is just "this session was intentionally ended elsewhere,"
+  not theft. The old code conflated the two, which meant B4's entire
+  premise (log out *this one* device, keep the rest alive) would silently
+  self-defeat the next time the logged-out device tried to refresh. Fixed
+  by checking `replacedByHash` before treating a revoked-token replay as
+  reuse; a direct revocation now correctly reports plain `invalid` and
+  touches nothing else. This also quietly improves B2's password-reset
+  path and B1's own logout, which had the same latent conflation — they
+  just hadn't been exercised in a way that surfaced it, since a browser
+  normally clears its own cookie on its own logout. Re-verified against the
+  live dev server (not just the test suite) that the exact broken sequence
+  now behaves correctly.
+- **Tests:** `apps/api/src/__tests__/sessions.test.ts` (new, 8 tests) —
+  lists current session correctly (with and without a second login, with
+  and without the refresh cookie present), revokes one session by id and
+  confirms it can no longer refresh, refuses to revoke another user's
+  session (404, not leaking whether it exists), logout-all revokes every
+  other session but keeps the current one refreshable, auth required on
+  all three endpoints, and — the one that specifically regression-tests the
+  bug above — revoking one device's session and then presenting *that*
+  device's stale cookie must reject only that device, not cascade.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **81/81** across
+  12 files (8 new).
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean, all 10 routes still prerender.
+- Manual smoke test against a locally running API — this is the pass that
+  actually caught the bug above, which none of the automated tests written
+  before it exercised: demo login unaffected throughout; registered a
+  throwaway account, logged in a "second device" (custom `User-Agent`),
+  confirmed the session list correctly showed two rows with exactly one
+  marked current; revoked the non-current one via `DELETE`, confirmed its
+  cookie 401s on refresh — first attempt showed the current session's
+  cookie *also* went dead afterward (the bug); applied the fix; re-ran the
+  identical sequence against the (auto-reloaded, `tsx watch`) dev server
+  and confirmed the current session's cookie now still works after the
+  other one is revoked and later presented stale. Also re-verified
+  logout-all (three sessions, keep-current) end-to-end. Deleted all
+  throwaway accounts and stopped the dev server afterward — no data left
+  behind.
+
+**Blockers:** None. Phase B (auth hardening) is now fully complete — B1
+through B4 all `DONE`. No new env vars.
+
+**Files touched:** `apps/api/src/lib/refreshTokens.ts`,
+`apps/api/src/routes/sessions.ts` (new), `apps/api/src/app.ts`,
+`apps/api/src/__tests__/sessions.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — Phase B is
+complete. `B5` (settings: change password while authenticated — display
+name/theme are already wired from before this session) is the one
+remaining Phase B item but is low priority polish, not a security gap.
+Better next moves: check whether a human has supplied any of the
+outstanding Phase C credentials (Twitter/Meta developer apps, a Bluesky
+app password for `C1a`, or clicking through Mastodon's OAuth flow for
+`C2a`) — if not, Phase D (feed quality: a real sync worker, dedup, media
+rendering) is the natural next phase, since Phase C's two shipped
+connectors (Bluesky, Mastodon) currently only fetch on connect, not on a
+cadence.
+
 ### 2026-08-26 — Session 3 continued again (Phase B2: password reset + email verification)
 
 **Summary:** Same session as B1/B3 above, continued straight through per the
