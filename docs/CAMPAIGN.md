@@ -46,6 +46,113 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued an eighth time (Phase E2: scheduled send worker, and a second real bug found by reading the existing code)
+
+**Summary:** Checked PR #5's CI on the D4 push before continuing — green
+(`CodeQL`, `build-and-test`, both `Analyze` jobs `success`, `mergeable_state:
+"clean"`). D6 (search) needs Phase G1 (real Postgres) to be worth doing
+properly, so moved to **Phase E** instead, per the D4 entry's own note.
+Picked **E2** (scheduled send worker) — `.env.example` already documented
+the intended design (`CRON_SECRET` + `POST /internal/tick`) from a much
+earlier session, so the shape of this slice was already decided; it just
+hadn't been built.
+
+**What shipped:**
+- **The bug, found while reading `routes/posts.ts` to scope this**:
+  `POST /api/posts` already accepted `scheduledAt` in its request schema
+  and stored it on the `PublishJob` row — but then published to every
+  platform immediately regardless, unconditionally, every time. A user
+  "scheduling" a post for tomorrow would actually have it posted right
+  now. The web composer never exposed a scheduling control (confirmed by
+  grepping the whole `apps/web` tree for `schedule`), so this was
+  unreachable from the actual product — but it's exactly the kind of
+  latent, API-only gap this session has been catching by reading code
+  closely rather than assuming an existing field was wired up correctly
+  (echoes the D2 pagination bug from earlier today, and the B4
+  reuse-detection cascade before that).
+- **`lib/publish.ts`** (new) — `attemptPublish()`: publishes to one
+  platform and records the outcome on an *existing* `PublishTarget` row
+  (never creates a new one), so the immediate-publish path and the tick
+  worker share identical logic instead of two copies drifting apart.
+  `runDueScheduledSends()`: finds every `PublishJob` with `scheduledAt` in
+  the past that still has pending targets, and publishes them — critically,
+  re-resolving each user's `Connection` fresh at send time rather than
+  trusting anything decided when the post was scheduled, so a user who
+  reconnected (or disconnected) a platform in between gets correct
+  behavior either way.
+- **`routes/posts.ts`** rewritten: every `PublishTarget` is now created
+  `"pending"` up front (the model already had this as its default status —
+  it just was never actually used); a due-or-unscheduled post is published
+  immediately right after via the same `attemptPublish()`, while a future
+  one is left pending and returned to the client as `"pending"` rather than
+  `"success"`/`"failed"`.
+- **`routes/internal.ts`** (new) — `POST /internal/tick`: `x-cron-secret`
+  header checked with `crypto.timingSafeEqual` (not `===`, to avoid a
+  timing side-channel on the secret compare — consistent with this
+  session's security rigor elsewhere). Unset `CRON_SECRET` falls back to a
+  fixed, exported-for-tests dev-only secret in non-production (mirrors
+  `lib/crypto.ts`'s `DATA_KEY` pattern exactly), and hard-503s in
+  production instead of silently accepting a guessable default. Rate-
+  limited (30/min) as defense in depth, generous enough not to false-
+  positive a real cron's cadence. **Deliberately an external-cron design,
+  not an in-process timer like D1's feed sync** — the two phases made
+  different tradeoffs on purpose: missing a feed-sync tick just delays a
+  refresh, but a scheduled *send* firing at the wrong time is a much
+  worse failure mode, and an external cron keeps firing on schedule across
+  API restarts/redeploys where an in-process timer resets. Documented this
+  reasoning directly in the route's own comment so a future session
+  doesn't "simplify" it into a setInterval and lose the property that made
+  it worth building this way.
+- **Tests**: `apps/api/src/__tests__/posts.test.ts` (new — `posts.ts` had
+  zero coverage before this) — immediate publish unchanged, a future
+  `scheduledAt` stays pending and touches neither the connector nor the
+  feed, a past `scheduledAt` still publishes immediately (boundary check),
+  missing-connection rejection still works for both paths.
+  `apps/api/src/__tests__/internal.test.ts` (new, 6 tests) — auth rejection
+  (no secret, wrong secret), a due job's pending target publishes while a
+  future one stays untouched, a connector failure at send time is recorded
+  without crashing the tick, a since-disconnected platform is recorded as
+  a clear failure rather than crashing, rate limiting trips at 30/min.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **107/107**
+  across 17 files (10 new: 4 in `posts.test.ts`, 6 in `internal.test.ts`).
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean (unaffected, all 10 routes still prerender).
+- Manual smoke test against a locally running API — the real payoff of
+  testing this end-to-end rather than trusting the unit tests alone:
+  confirmed `demo@nexus.app` still logs in; scheduled a post 1 hour out via
+  the real API and confirmed the response said `"pending"`, not
+  `"success"`; called `/internal/tick` with no secret (401), the wrong
+  secret (401), and the real dev-fallback secret (200, correctly
+  `jobsProcessed: 0` since nothing was due yet); backdated that job's
+  `scheduledAt` directly in the DB to simulate an hour passing; called
+  `/internal/tick` again and confirmed `jobsProcessed: 1, targetsPublished:
+  1`; confirmed via `/api/feed` that the published post actually appears
+  there, `isOwn: true`. Deleted the throwaway job/feed post afterward;
+  stopped the dev server.
+
+**Blockers:** None. No env vars required for this to work locally (the dev
+fallback secret covers it); `CRON_SECRET` documented in `.env.example` for
+whoever wires up the actual external cron in production.
+
+**Files touched:** `apps/api/src/config.ts`, `apps/api/src/lib/publish.ts`
+(new), `apps/api/src/routes/posts.ts`, `apps/api/src/routes/internal.ts`
+(new), `apps/api/src/app.ts`, `apps/api/.env.example`,
+`apps/api/src/__tests__/posts.test.ts` (new),
+`apps/api/src/__tests__/internal.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — Phase E now
+has E1 and E2 both `DONE`. **E3** (media upload pipeline — local disk dev,
+S3-compatible prod) is the natural next Phase E item, though it's a bigger
+lift than most slices this session (needs an actual upload endpoint, not
+just URL passthrough) — consider whether **E5** (per-platform char-limit
+preview, adding Instagram to `PLATFORM_META`) or **E6** (idempotency keys
+to prevent double-post on double-click) are faster wins first. As always,
+check the Parked/WAITING-ON-HUMAN section for new credentials before
+assuming Phase E/F is still the right phase to be in over Phase C's gated
+items.
+
 ### 2026-08-26 — Session 3 continued a seventh time (Phase D4: media rendering — images)
 
 **Summary:** Checked PR #5's CI on the D2 push before continuing — green
