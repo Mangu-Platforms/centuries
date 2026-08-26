@@ -124,6 +124,12 @@ export const api = {
   requestEmailVerification: () =>
     request<{ ok: boolean; alreadyVerified?: boolean }>("/api/auth/email/verify/request", { method: "POST" }),
 
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
   sessions: () => request<{ sessions: SessionInfo[] }>("/api/auth/sessions"),
 
   revokeSession: (id: string) => request<{ ok: boolean }>(`/api/auth/sessions/${id}`, { method: "DELETE" }),

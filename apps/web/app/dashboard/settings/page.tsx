@@ -31,6 +31,12 @@ function SettingsPageInner() {
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const loadSessions = () => api.sessions().then((r) => setSessions(r.sessions)).catch(() => {});
   useEffect(() => {
@@ -90,6 +96,33 @@ function SettingsPageInner() {
       setVerifyError(err instanceof ApiError ? err.message : "Failed to send verification email");
     } finally {
       setSendingVerification(false);
+    }
+  };
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordMessage(null);
+    setPasswordError(null);
+    if (newPassword.length < 8) {
+      setPasswordError("New password must be at least 8 characters");
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError("New passwords don't match");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      setPasswordMessage("Password changed. Your other sessions have been logged out.");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      loadSessions();
+    } catch (err) {
+      setPasswordError(err instanceof ApiError ? err.message : "Failed to change password");
+    } finally {
+      setChangingPassword(false);
     }
   };
 
@@ -190,6 +223,46 @@ function SettingsPageInner() {
         {verifyError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{verifyError}</p>}
         {verifyMessage && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{verifyMessage}</p>}
       </div>
+
+      <form onSubmit={changePassword} className="card space-y-4 p-5">
+        <h2 className="font-bold text-slate-900 dark:text-white">Change password</h2>
+        <div>
+          <label className="label">Current password</label>
+          <input
+            type="password"
+            className="input"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            required
+          />
+        </div>
+        <div>
+          <label className="label">New password</label>
+          <input
+            type="password"
+            className="input"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="At least 8 characters"
+            required
+          />
+        </div>
+        <div>
+          <label className="label">Confirm new password</label>
+          <input
+            type="password"
+            className="input"
+            value={confirmNewPassword}
+            onChange={(e) => setConfirmNewPassword(e.target.value)}
+            required
+          />
+        </div>
+        {passwordError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{passwordError}</p>}
+        {passwordMessage && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{passwordMessage}</p>}
+        <button type="submit" className="btn-primary" disabled={changingPassword}>
+          {changingPassword ? "Changing…" : "Change password"}
+        </button>
+      </form>
 
       <div className="card space-y-3 p-5">
         <div className="flex items-center justify-between">
