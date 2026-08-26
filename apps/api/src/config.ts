@@ -23,6 +23,10 @@ export const config = {
     process.env.WEB_APP_URL ??
     (process.env.CORS_ORIGIN ?? "http://localhost:3000").split(",")[0].trim()
   ).replace(/\/+$/, ""),
+  // Shared secret an external cron must present to POST /internal/tick
+  // (Phase E2). See src/routes/internal.ts for the dev-only fallback used
+  // when unset.
+  cronSecret: process.env.CRON_SECRET ?? "",
 };
 
 // Platform metadata derived from the BRD (section 8: Platform Integration Specs).
