@@ -50,6 +50,42 @@ function ReplyIcon() {
   );
 }
 
+// Phase D4: images first, video is a future follow-up. Mirrors the classic
+// 1/2/3/4-photo grid layouts (a single image keeps its own aspect ratio up
+// to a max height; 2/4 are even squares; 3 is one tall image beside two
+// stacked ones) rather than a naive same-size-for-every-count grid, which
+// looks cramped for a single wide image and awkward for three.
+function MediaGrid({ urls }: { urls: string[] }) {
+  if (urls.length === 0) return null;
+  const shown = urls.slice(0, 4);
+
+  if (shown.length === 1) {
+    return (
+      <a href={shown[0]} target="_blank" rel="noreferrer" className="mt-3 block overflow-hidden rounded-xl">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={shown[0]} alt="" className="max-h-96 w-full object-cover" />
+      </a>
+    );
+  }
+
+  return (
+    <div className={`mt-3 grid gap-1 overflow-hidden rounded-xl ${shown.length === 3 ? "grid-cols-2 grid-rows-2" : "grid-cols-2"}`}>
+      {shown.map((url, i) => (
+        <a
+          key={url + i}
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className={`block aspect-square ${shown.length === 3 && i === 0 ? "row-span-2 aspect-auto" : ""}`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={url} alt="" className="h-full w-full object-cover" />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function BookmarkIcon({ filled }: { filled: boolean }) {
   return (
     <svg
@@ -127,6 +163,8 @@ export function PostCard({ post }: { post: FeedPost }) {
           <p className="mt-1.5 whitespace-pre-wrap break-words leading-relaxed text-slate-800 dark:text-slate-200">
             {state.content}
           </p>
+
+          <MediaGrid urls={state.mediaUrls} />
 
           <div className="mt-3 flex items-center gap-1 text-sm text-slate-500">
             <button
