@@ -9,6 +9,11 @@ import { connectionRoutes } from "./routes/connections.js";
 import { feedRoutes } from "./routes/feed.js";
 import { postRoutes } from "./routes/posts.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+// Side-effect import: registers the live Bluesky connector with the
+// connector registry (see connectors/registry.ts). Each live connector as
+// it's implemented (Phase C) gets one line like this — this is the single
+// place that wires "live connectors exist" into a running app.
+import "./connectors/bluesky.js";
 
 /** Structured API error shape returned by the global error/not-found handlers. */
 interface ApiErrorBody {
