@@ -46,6 +46,69 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 4 (Phase E3: media upload pipeline)
+
+**Summary:** PR #5 (Phase C2, carrying forward every phase through F6) was
+merged by a human. Per this repo's "a merged PR is finished" convention,
+restarted `claude/nexus-production-build-s6p5hz` from the current default
+branch (`autonomous-agent-setup-6249396920522474145`) — a plain
+`git merge --ff-only` was safe since the branch's prior head was already
+fully contained in the new base (nothing unmerged to carry forward), and
+pushed the restarted branch. Picked **E3** (media upload pipeline) next —
+the highest-priority unblocked `TODO` in Phase E.
+
+**What shipped:** New `MediaStorage` interface (`apps/api/src/lib/mediaStorage.ts`)
+with a `LocalDiskStorage` default — same "ship a fully-working default,
+gate the real backend behind env" split this campaign already used for
+`EmailProvider`/`ConsoleEmailProvider` (Phase B2), since no S3-compatible
+bucket or credentials exist yet (parked `WAITING-ON-HUMAN` as `E3a`).
+`POST /api/media/upload` (new `apps/api/src/routes/media.ts`, authenticated,
+rate-limited 20/min via `@fastify/multipart`): accepts one image
+(jpeg/png/gif/webp), 10MB max, stores it under a random UUID-based
+filename — never the client-supplied name — and returns `{ url, key }`
+directly usable in `POST /api/posts`'s existing `mediaUrls` field.
+`GET /uploads/:key` serves it back; the key must match a strict
+`UUID.ext` pattern before ever touching disk, which rules out path
+traversal by construction rather than by sanitizing client input. Web:
+`Composer` gained an "add photo" control (up to 4 images, matching the
+existing `mediaUrls` cap), sequential uploads (keeps order == selection
+order, avoids bursting the rate limit on a multi-file drop), thumbnail
+previews with per-image remove, "Post" disabled mid-upload.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 tests, +6 new in `media.test.ts`: auth required, a real
+PNG round-trips byte-for-byte through upload → serve, rejects a
+disallowed MIME type, rejects a real 11MB file — genuinely oversized, not
+a mocked check — rejects a request with no file field, and the serving
+route 404s a well-formed-but-missing key vs. 400s a malformed one).
+Manual end-to-end smoke test against a live server: logged in as
+`demo@nexus.app`, uploaded a real PNG via `curl`, confirmed the served
+file was byte-identical to the original (`cmp`), then published a post
+carrying that media URL and confirmed it published successfully — all
+with zero third-party credentials. Cleaned up the local `uploads/`
+directory afterward (gitignored either way).
+
+**Files touched:** `apps/api/src/lib/mediaStorage.ts` (new),
+`apps/api/src/routes/media.ts` (new), `apps/api/src/__tests__/media.test.ts`
+(new), `apps/api/src/app.ts`, `apps/api/package.json`,
+`apps/web/components/Composer.tsx`, `apps/web/lib/api.ts`, `.gitignore`,
+`docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None for the local-disk path. `E3a` (S3-compatible storage)
+parked `WAITING-ON-HUMAN` — needs a real bucket + credentials; the swap-in
+point is documented in `BACKLOG.md`.
+
+**Next step:** Check for an open PR on this restarted branch (none should
+exist yet — open a new draft PR and subscribe to its activity). After
+that, remaining open items: E4 (per-target status UI polish — API already
+returns it), E5 (Instagram char-limit preview — needs standing up
+Instagram as a platform from scratch), and Phase F (F1 analytics, F2
+platform-mirrored bookmarks/likes, F3 empty-states/toasts — `PostCard`
+already has optimistic UI w/ rollback for like/bookmark, worth a scoping
+pass before assuming untouched, F5 landing page polish). Check the
+Parked/WAITING-ON-HUMAN section of `BACKLOG.md` for any new credentials
+before picking the next phase.
+
 ### 2026-08-26 — Session 3 continued a tenth time (Phase F6: Playwright smoke test + CI wiring; F4 backlog correction)
 
 **Summary:** Checked PR #5's CI on the E6 push before continuing — green.
