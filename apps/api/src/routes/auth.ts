@@ -4,7 +4,9 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import {
+  findActiveSessionIdByRawToken,
   issueRefreshToken,
+  revokeAllForUserExcept,
   revokeRefreshToken,
   rotateRefreshToken,
   REFRESH_COOKIE_NAME,
@@ -21,6 +23,11 @@ const registerSchema = z.object({
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 // Access tokens are short-lived JWTs (Phase B1): the long-lived credential
@@ -202,6 +209,36 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!user) return reply.code(404).send({ error: "User not found" });
     return reply.send({ user: publicUser(user) });
   });
+
+  app.post(
+    "/api/auth/change-password",
+    { preHandler: [app.rateLimit({ max: 10, timeWindow: "1 minute" }), app.authenticate] },
+    async (request, reply) => {
+      const parsed = changePasswordSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0].message });
+
+      const user = await prisma.user.findUnique({ where: { id: request.user.sub } });
+      if (!user) return reply.code(404).send({ error: "User not found" });
+
+      if (!(await bcrypt.compare(parsed.data.currentPassword, user.passwordHash))) {
+        return reply.code(401).send({ error: "Current password is incorrect" });
+      }
+
+      const passwordHash = await bcrypt.hash(parsed.data.newPassword, 12); // BRD NF16: bcrypt cost 12
+      await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+
+      // Keep the session making this request alive (the user just proved
+      // they control it by entering the current password), but sign every
+      // other session out — same reasoning as a B2 password reset: a
+      // credential change should invalidate sessions the user didn't just
+      // re-prove control of.
+      const rawToken = request.cookies[REFRESH_COOKIE_NAME];
+      const currentSessionId = rawToken ? await findActiveSessionIdByRawToken(rawToken) : null;
+      await revokeAllForUserExcept(user.id, currentSessionId);
+
+      return reply.send({ ok: true });
+    },
+  );
 
   app.patch("/api/auth/me", { preHandler: [app.authenticate] }, async (request, reply) => {
     const schema = z.object({
