@@ -74,13 +74,25 @@ export async function rotateRefreshToken(
   if (!existing) return { status: "invalid" };
 
   if (existing.revokedAt) {
-    // This exact token was already used once before (or explicitly
-    // revoked, e.g. by logout). Presenting it again means either a replay
-    // of a stolen old cookie, or a benign double-submit race. Either way,
-    // do not trust this token chain further: revoke every other active
-    // token for the user so a real thief loses their session too.
-    await revokeAllForUser(existing.userId);
-    return { status: "reused" };
+    if (existing.replacedByHash) {
+      // This token was rotated into a newer one, and is now being
+      // presented again — the only legitimate way that happens is a
+      // stolen/replayed old cookie (a real client always moves on to the
+      // rotated token, never reuses the one it replaced). Don't trust this
+      // token chain further: revoke every other active session for the
+      // user so a real thief loses theirs too.
+      await revokeAllForUser(existing.userId);
+      return { status: "reused" };
+    }
+    // Revoked directly — logout, an explicit per-session revoke or
+    // logout-all (Phase B4), or a password reset (Phase B2) — rather than
+    // rotated into a successor. That's normal lifecycle, not evidence of
+    // theft: e.g. logging out one *other* device via the session-list UI
+    // leaves that device's browser still holding its now-stale cookie,
+    // which it will naturally try to refresh with later. Treating that as
+    // theft would cascade into revoking every other session too, defeating
+    // the entire point of a selective "log out this one device" action.
+    return { status: "invalid" };
   }
 
   if (existing.expiresAt.getTime() < Date.now()) {
@@ -111,4 +123,45 @@ export async function revokeAllForUser(userId: string): Promise<void> {
     where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+}
+
+export interface ActiveSession {
+  id: string;
+  userAgent: string;
+  ipAddress: string;
+  createdAt: Date;
+}
+
+/** Lists a user's currently-valid (not revoked, not expired) sessions, newest first (Phase B4). */
+export async function listActiveSessions(userId: string): Promise<ActiveSession[]> {
+  return prisma.refreshToken.findMany({
+    where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, userAgent: true, ipAddress: true, createdAt: true },
+  });
+}
+
+/** Resolves the session id a raw refresh token belongs to, if it's currently active. Used to mark "this device" in a session list. */
+export async function findActiveSessionIdByRawToken(rawToken: string): Promise<string | null> {
+  const existing = await prisma.refreshToken.findUnique({ where: { tokenHash: hashToken(rawToken) } });
+  if (!existing || existing.revokedAt) return null;
+  return existing.id;
+}
+
+/** Revokes one specific session, scoped to its owner. Returns false if it doesn't exist, isn't the caller's, or is already revoked. */
+export async function revokeSession(userId: string, sessionId: string): Promise<boolean> {
+  const result = await prisma.refreshToken.updateMany({
+    where: { id: sessionId, userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return result.count > 0;
+}
+
+/** Revokes every active session for a user except the one given (e.g. "log out all other devices"). Returns the number revoked. */
+export async function revokeAllForUserExcept(userId: string, keepSessionId: string | null): Promise<number> {
+  const result = await prisma.refreshToken.updateMany({
+    where: { userId, revokedAt: null, ...(keepSessionId ? { id: { not: keepSessionId } } : {}) },
+    data: { revokedAt: new Date() },
+  });
+  return result.count;
 }
