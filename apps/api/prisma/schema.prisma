@@ -145,10 +145,18 @@ model PublishJob {
   mediaUrls   String   @default("[]")
   scheduledAt DateTime?
   createdAt   DateTime @default(now())
+  // Phase E6: an optional client-supplied key (e.g. a UUID generated once
+  // per compose session). A retried request with the same key — a
+  // double-click, a client retry after a dropped response — returns the
+  // original job's result instead of publishing again. Nullable + only
+  // unique when set, so a caller that doesn't send one (or two of them,
+  // both null) is unaffected.
+  idempotencyKey String?
 
   user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   targets PublishTarget[]
 
+  @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
 }
 
