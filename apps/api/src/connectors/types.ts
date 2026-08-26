@@ -21,6 +21,12 @@ export interface PublishResult {
 export interface ConnectionContext {
   handle: string;
   instance?: string;
+  /** Decrypted OAuth access token, when the connection has one stored. */
+  accessToken?: string;
+  /** Decrypted OAuth refresh token, when the connection has one stored. */
+  refreshToken?: string;
+  /** Decrypted app password (e.g. Bluesky), when the connection has one stored. */
+  appPassword?: string;
 }
 
 /**

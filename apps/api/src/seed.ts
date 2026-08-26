@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "./db.js";
 import { PLATFORM_IDS } from "./config.js";
-import { getConnector } from "./connectors/demo.js";
+import { getConnector } from "./connectors/registry.js";
 
 // Seeds a ready-to-explore demo account:
 //   email:    demo@nexus.app

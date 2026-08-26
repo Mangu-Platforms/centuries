@@ -1,0 +1,244 @@
+# NEXUS — Campaign Log
+
+This is the living constitution + session log for the 1242-hour autonomous
+build campaign. The full charter is appended to `AGENTS.md`. Read this file
+first, every session, before touching code.
+
+## Operating loop (every session)
+
+1. Re-read this file (especially the last entry's "Next step").
+2. Open `docs/BACKLOG.md`, pick the single highest-priority `TODO` item that
+   is unblocked. Flip it to `IN PROGRESS`.
+3. Write a failing test or a checklist first.
+4. Implement the smallest slice that makes it pass.
+5. `npm run lint && npm test && npm run build` — all three green, no
+   exceptions.
+6. Confirm the demo account (`demo@nexus.app` / `password123`) still logs in
+   and demo connectors still work with zero third-party keys.
+7. Commit in small, reviewable commits. Push to
+   `claude/nexus-production-build-s6p5hz`. Open the draft PR if none exists
+   yet for this branch, otherwise it updates automatically.
+8. Flip the backlog item to `DONE` (or `WAITING-ON-HUMAN` / `BLOCKED` with a
+   one-line reason) in `docs/BACKLOG.md`.
+9. Append a new entry below in **reverse-chronological order** (newest on
+   top) with: date, session summary, item id, files touched, commands run +
+   results, blockers, and the exact next command for the next session.
+
+## Hard stops (see AGENTS.md for full list)
+
+Never: commit a real secret · call a live social API with fabricated tokens ·
+delete demo connectors · rewrite Fastify→Nest or Next→Vite · store OAuth
+tokens in plaintext · force-push to main · burn 4+ hours on a slice with no
+test or visible UI change.
+
+---
+
+## Session log
+
+### 2026-08-26 — Session 2 (Phase C1: live Bluesky connector)
+
+**Summary:** First firing of the recurring campaign trigger (self-bind,
+every 4 hours). Confirmed the branch head matched this session's own prior
+work (no external changes since Session 1) via `git fetch` + `status` +
+`log` before touching anything. Picked Phase C1 — the first live connector
+— since it needs no OAuth developer app, only a user-supplied Bluesky app
+password at connect time.
+
+**What shipped:**
+- `apps/api/src/connectors/bluesky.ts` — a `PlatformConnector` implementation
+  using `@atproto/api`. Stateless by design: every `fetchTimeline`/`publish`
+  call logs in fresh with `AtpAgent` rather than caching a session (session
+  caching + retry/backoff is Phase C5, not this slice). Before writing any
+  code, verified the actual installed package's `.d.ts` files (not memory)
+  for `AtpAgent`'s constructor/login signature, `Agent.getTimeline`/`.post`,
+  and the `FeedViewPost`/`PostView`/image-embed response shapes — confirmed
+  via `npx tsc --noEmit` against the real types with zero errors on the
+  first pass.
+- Self-registers via `registerLiveConnector("bluesky", ...)` (the seam
+  `registry.ts` defines); wired into the running app with one side-effect
+  import (`import "./connectors/bluesky.js"`) in `app.ts` — the pattern each
+  future live connector (C2–C4) will repeat.
+- Images are read from the timeline (`app.bsky.embed.images#view` →
+  `fullsize` URLs) but publish is text-only for now — matches the *existing*
+  demo connectors' behavior (they already discard `mediaUrls` on publish),
+  so this isn't a regression; real media upload is Phase E3.
+- `routes/connections.ts`: the initial-timeline-fetch on connect is now
+  wrapped in try/catch. A rejected live credential (wrong app password, a
+  network error) no longer 500s the connect request — the connection is
+  kept with `status: "error"` and the response carries a `warning` string,
+  so a bad credential is a handled outcome the user can see and retry, not
+  a crash. This closes a real gap the live connector just exposed: before
+  C1, `fetchTimeline` could never throw (demo connectors don't), so this
+  code path was previously unreachable.
+- Tests: `bluesky.test.ts` (6) unit-tests the connector against a **mocked**
+  `AtpAgent` (`vi.hoisted` + `vi.mock("@atproto/api", ...)`) — response
+  mapping, `@`-stripping on login, avatar fallback, missing-credential
+  refusal (asserts the mock constructor is never even called), and publish.
+  `connections.test.ts` (2, new file) exercises the real `POST
+  /api/connections` route end-to-end via `app.inject` with the same mock,
+  covering both the success path (imports posts, no warning) and the
+  rejected-credential path (201 with `warning`, connection status
+  `"error"`, no 500). **No live network call to Bluesky was made anywhere
+  in this session** — every test and every manual check used either the
+  mock or the zero-credential demo path.
+- `.env.example`: documented optional `BLUESKY_SERVICE_URL` override.
+
+**Commands run (all green):**
+- `npm install` (added `@atproto/api@^0.20.41`).
+- `npx tsc --noEmit -p apps/api/tsconfig.json` — clean against the real
+  `@atproto/api` types on the first pass.
+- `npm test -w @nexus/api` — **27/27** vitest tests green across 6 files (8
+  new: 6 in `bluesky.test.ts`, 2 in `connections.test.ts`).
+- `npm run lint && npm test && npm run build` (root) — all green.
+- Manual smoke test against a locally running API: demo login still works;
+  the seeded demo Bluesky connection (no stored credential) still resolves
+  to the **demo** connector for both feed and cross-post — confirmed by the
+  cross-post's `externalId` still being in the demo format
+  (`bluesky-post-<timestamp>`), not an AT-URI — proving a live connector
+  existing in the registry does not change behavior for any connection that
+  has no credentials. DB reset to a clean seed afterward; test-created
+  users cleaned up via each test's own `afterEach`.
+
+**Blockers:** None for shipping the code. `C1a` (real end-to-end validation
+against production `bsky.social`) is parked `WAITING-ON-HUMAN` in
+`docs/BACKLOG.md` — needs a human-supplied Bluesky app password for a test
+account, per the charter's "first human work" list. `C1b` (surface the new
+`warning` field in the web connect UI) is parked as a `C6` follow-up.
+
+**Files touched:** `apps/api/package.json`, `apps/api/package-lock.json`
+(via `npm install`), `apps/api/src/connectors/bluesky.ts` (new),
+`apps/api/src/app.ts`, `apps/api/src/routes/connections.ts`,
+`apps/api/.env.example`, `apps/api/src/__tests__/bluesky.test.ts` (new),
+`apps/api/src/__tests__/connections.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — C1 is DONE
+(code-complete, live-unverified). Take **C2** (Mastodon OAuth 2.0 against a
+user-supplied instance) next, since it also needs no pre-registered
+developer app (NEXUS registers a per-instance OAuth app dynamically). If a
+human has supplied a real Bluesky app password by then, do `C1a` (real
+end-to-end validation) first — it's a quick, high-value confidence check
+before building the next connector on the same pattern.
+
+### 2026-08-25 — Session 1 addendum: CI fix
+
+PR #4's first CI run (`build-and-test`) failed on `npm run lint`: dozens of
+TS errors (`Prisma.FeedPostWhereInput` missing, `Connection` fields typed as
+`{}`, implicit `any`s) that did **not** reproduce locally. Root cause: CI ran
+`npm run lint` immediately after `npm ci`, before the "Set up dev database"
+step — but `npm ci` only installs the `@prisma/client` package skeleton; the
+actual generated model types come from `prisma generate` (which `db:setup`'s
+`prisma db push` runs as a side effect). Locally this never surfaced because
+`db:setup` had already been run earlier in the session, well before lint.
+Reproduced by deleting `node_modules/.prisma` and re-running `tsc` (same
+error signature), fixed by moving the DB-setup step before lint in
+`.github/workflows/ci.yml`, and re-verified by running the corrected step
+order end-to-end from a clean DB/generated-client state. Pushed as
+`0975f24`. **Confirmed green** on the next push (`cb81286`): `build-and-test`
+(`conclusion: success`), plus CodeQL and the JS/TS + Python analyze checks,
+all passed. PR #4 is fully green and mergeable as of this addendum.
+
+### 2026-08-25 — Session 1 (Phase A: foundation, complete)
+
+**Summary:** First session of the 1242-hour campaign. Verified the repo
+matched the charter's "current state" description exactly (demo connectors,
+JWT auth, unified feed, composer all working; no docs/, no CI, no encrypted
+credential storage, no connector registry). Ran the full first-actions
+checklist — install/db:setup/lint/test/build all green before any change —
+then shipped all of Phase A (A1–A7) as one mergeable slice.
+
+**What shipped:**
+- `docs/CAMPAIGN.md` (this file), `docs/BACKLOG.md`, `docs/BRD.md`
+  (reconstructed from in-code requirement IDs: FD01/02/04/06, CP02, NF03,
+  NF16, DS03, §5.5, §5.6, §8 — original BRD v1.0 source not recovered),
+  `docs/ARCHITECTURE.md`.
+- Full charter appended to `AGENTS.md` (Cursor Cloud notes untouched) plus
+  an "operational notes" section on how this charter actually executes
+  across many bounded sessions rather than one 1242h run.
+- `.github/workflows/ci.yml` — installs, lints (API typecheck + web lint),
+  seeds an ephemeral SQLite DB, runs vitest, builds both apps, on every PR
+  and on pushes to the repo's current default branch.
+- `DEPLOY.md` — the hardcoded `JWT_SECRET` example replaced with
+  `openssl rand` generation instructions (`DATA_KEY` generation added
+  alongside it); every reference to the leftover
+  `autonomous-agent-setup-...` branch name replaced with
+  `<your-production-branch>` plus a note that the repo has no `main` yet and
+  renaming the default branch is a human/repo-admin action, not something to
+  script. `redinc23/centuries` references corrected to
+  `Mangu-Platforms/centuries`.
+- `apps/api/.env.example` expanded with `DATA_KEY`, gated
+  `TWITTER_CLIENT_ID/SECRET`, `META_APP_ID/SECRET`, and `CRON_SECRET` for
+  phases C and E, each commented with which phase needs it and that it's
+  safe to leave unset (demo mode continues to work).
+- `Connection` model gained encrypted-at-rest credential fields
+  (`accessTokenEnc`, `refreshTokenEnc`, `tokenExpiresAt`, `appPasswordEnc`,
+  `scopes`, `metadata`) and `apps/api/src/lib/crypto.ts` (AES-256-GCM,
+  keyed by `DATA_KEY`, dev-only deterministic fallback when unset so local
+  dev/tests never break, hard throw in production if `DATA_KEY` is
+  missing/malformed).
+- `apps/api/src/connectors/registry.ts` — `getConnector(platform,
+  hasCredentials)` picks a live connector if one has been registered for
+  that platform *and* the specific connection has credentials, else falls
+  back to the demo connector. `registerLiveConnector()` is the seam Phase C
+  will call into one platform at a time; nothing registers yet. Routes
+  (`connections.ts`, `posts.ts`) and `seed.ts` now import from the registry
+  instead of `connectors/demo.ts` directly, per the charter's "don't scatter
+  connector calls" rule.
+- `connections.ts` now encrypts a posted app-password credential into
+  `appPasswordEnc` for app-password platforms (Bluesky today) before
+  storage, decrypts it back out only when handing it to a connector, and
+  never returns any `*Enc` field to the client (`publicConnection()`
+  serializer). OAuth-platform credentials are still accepted-but-unused,
+  same as before, until Phase B/C's real OAuth exchange exists.
+- `apps/api/src/app.ts` — request IDs (`genReqId` via `crypto.randomUUID()`,
+  echoed as `x-request-id`), a global `setErrorHandler` and
+  `setNotFoundHandler` returning `{ error, code, requestId, details? }`, and
+  `GET /ready` (checks the DB with `SELECT 1`; `/health` stays untouched and
+  free).
+- New tests: `crypto.test.ts` (5), `registry.test.ts` (4), `app.test.ts` (5)
+  — 19 new/total assertions on top of the existing 5 in
+  `connectors.test.ts`. Vitest suite is now 4 files / 19 tests, all green.
+
+**Commands run (all green):**
+- `npm install` — 559 packages. `npm audit` flags 22 pre-existing
+  vulnerabilities in transitive deps (3 critical, 16 high, 3 moderate) —
+  not introduced this session, not addressed here; worth a dedicated
+  `npm audit fix` pass as a future backlog item if any are actually
+  reachable (most look like dev-tooling transitive deps).
+- `npm run db:setup` — SQLite created/pushed with the new `Connection`
+  columns, demo user + 4 connections + 32 feed posts seeded.
+- `npm run lint` — API `tsc --noEmit` clean, web `next lint` clean.
+- `npm test` — 19/19 vitest tests green across 4 files.
+- `npm run build` — API + web both build clean.
+- Manual smoke test against a locally running API
+  (`npx tsx src/server.ts`): `/health`, `/ready`, demo login, `GET
+  /api/connections` (verified `appPasswordEnc`/`accessTokenEnc` are absent
+  from the response), `GET /api/feed`, `POST /api/posts` cross-post to
+  bluesky+mastodon (both succeeded via demo connectors), `POST
+  /api/connections` with a Bluesky app-password credential (verified via a
+  direct Prisma query that the stored `appPasswordEnc` is 68 bytes of
+  ciphertext and does **not** contain the plaintext credential), `GET
+  /api/does-not-exist` (confirmed `{error, code, requestId}` shape), and the
+  `x-request-id` response header. DB reset to a clean seed afterward.
+
+**Blockers:** None. Nothing in this slice needed a human (that's C3/C4).
+
+**Files touched:** `docs/CAMPAIGN.md`, `docs/BACKLOG.md`, `docs/BRD.md`,
+`docs/ARCHITECTURE.md`, `AGENTS.md`, `DEPLOY.md`,
+`.github/workflows/ci.yml`, `apps/api/.env.example`,
+`apps/api/prisma/schema.prisma`, `apps/api/src/config.ts`,
+`apps/api/src/lib/crypto.ts` (new), `apps/api/src/connectors/registry.ts`
+(new), `apps/api/src/connectors/types.ts`, `apps/api/src/routes/connections.ts`,
+`apps/api/src/routes/posts.ts`, `apps/api/src/seed.ts`, `apps/api/src/app.ts`,
+`apps/api/src/__tests__/crypto.test.ts` (new),
+`apps/api/src/__tests__/registry.test.ts` (new),
+`apps/api/src/__tests__/app.test.ts` (new).
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — Phase A is
+fully DONE. Start Phase C1: implement a live Bluesky connector
+(`@atproto/api`, app-password auth) in `apps/api/src/connectors/bluesky.ts`,
+call `registerLiveConnector("bluesky", ...)` from it, and wire it into
+`app.ts` (or a connectors index) so it's registered at boot. C1 needs no
+OAuth app review — only a Bluesky test account's app password, which is the
+one human input still owed per the charter (park with a WAITING-ON-HUMAN
+note in `docs/BACKLOG.md` if that credential isn't available yet and take
+`B1`–`B3` instead, which need no external credentials).

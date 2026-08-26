@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - autonomous-agent-setup-6249396920522474145
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "file:./dev.db"
+      JWT_SECRET: "ci-test-secret-not-for-production"
+      DATA_KEY: "7d9b4aee49674a85bdc571a68abc76ebe407606be2363f8cb1a481758f5bb8d9"
+      CORS_ORIGIN: "http://localhost:3000"
+      NEXT_PUBLIC_API_URL: "http://localhost:4000"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Must run before lint/build: `tsc` needs the generated Prisma client
+      # (model types) on disk, and `npm ci` alone only installs the
+      # @prisma/client package skeleton, not its generated types. `db:setup`
+      # (prisma db push + seed) generates the client as a side effect.
+      - name: Set up dev database
+        run: npm run db:setup -w @nexus/api
+
+      - name: Typecheck + lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

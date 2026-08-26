@@ -9,6 +9,9 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean),
   isProd: process.env.NODE_ENV === "production",
+  // 32-byte (64 hex char) key for encrypting connector credentials at rest.
+  // See src/lib/crypto.ts for the dev-only fallback used when unset.
+  dataKey: process.env.DATA_KEY ?? "",
 };
 
 // Platform metadata derived from the BRD (section 8: Platform Integration Specs).

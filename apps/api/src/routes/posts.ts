@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { PLATFORMS, isPlatform, type PlatformId } from "../config.js";
-import { getConnector } from "../connectors/demo.js";
+import { getConnector } from "../connectors/registry.js";
+import { decryptSecret } from "../lib/crypto.js";
 
 const publishSchema = z.object({
   content: z.string().min(1, "Post content is required").max(5000),
@@ -55,8 +56,14 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
     for (const platform of platforms) {
       const conn = byPlatform.get(platform)!;
       try {
-        const res = await getConnector(platform).publish(
-          { handle: conn.handle, instance: conn.instance },
+        const hasCredentials = Boolean(conn.appPasswordEnc || conn.accessTokenEnc);
+        const res = await getConnector(platform, hasCredentials).publish(
+          {
+            handle: conn.handle,
+            instance: conn.instance,
+            appPassword: conn.appPasswordEnc ? decryptSecret(conn.appPasswordEnc) : undefined,
+            accessToken: conn.accessTokenEnc ? decryptSecret(conn.accessTokenEnc) : undefined,
+          },
           content,
           mediaUrls,
         );
