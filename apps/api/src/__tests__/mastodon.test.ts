@@ -102,6 +102,36 @@ describe("Mastodon live connector", () => {
     expect(createRestAPIClientMock).toHaveBeenCalledWith({ url: "https://mastodon.social", accessToken: "tok" });
   });
 
+  it("never lets HTML-escaped text resurface as literal markup (CodeQL: incomplete sanitization)", async () => {
+    // Mastodon entity-escapes any literal "<"/">" a user types, so a toot
+    // containing the literal text "<script>...</script>" arrives from the
+    // API as "&lt;script&gt;...&lt;/script&gt;". Decoding entities *after*
+    // stripping tags (the original, wrong order) would unescape this back
+    // into literal, unstripped "<script>" text in RemotePost.content.
+    getTimelineMock.mockResolvedValue([
+      {
+        id: "1",
+        uri: "https://mastodon.social/@eve/1",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        account: { username: "eve", acct: "eve", displayName: "Eve", avatar: "" },
+        content: "<p>&lt;script&gt;alert(document.cookie)&lt;/script&gt; said Eve</p>",
+        mediaAttachments: [],
+        favouritesCount: 0,
+        reblogsCount: 0,
+        repliesCount: 0,
+      },
+    ]);
+    const connector = new MastodonConnector();
+    const posts = await connector.fetchTimeline(
+      { handle: "@eve@mastodon.social", instance: "mastodon.social", accessToken: "tok" },
+      10,
+    );
+    expect(posts[0].content).not.toMatch(/<script/i);
+    expect(posts[0].content).not.toContain("<");
+    expect(posts[0].content).not.toContain(">");
+    expect(posts[0].content).toBe("alert(document.cookie) said Eve");
+  });
+
   it("keeps an already-qualified remote acct as-is", async () => {
     getTimelineMock.mockResolvedValue([
       {

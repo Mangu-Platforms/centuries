@@ -37,16 +37,27 @@ function requireContext(ctx: ConnectionContext): { instanceUrl: string; accessTo
 // Mastodon status content is HTML-encoded; the web UI renders RemotePost's
 // content as plain text, so it must be stripped here rather than at render
 // time (mirrors how the rest of the app treats content as plain text).
+//
+// Entities are decoded BEFORE tags are stripped, not after: Mastodon
+// entity-escapes any literal "<"/">" a user types (so a toot containing the
+// literal text "<script>" arrives as "&lt;script&gt;"), while its own
+// structural markup ("<p>", "<br>") arrives unescaped. Decoding first means
+// a decoded "&lt;script&gt;" becomes "<script>" and is then swept up by the
+// same tag-strip pass as real markup. Decoding *after* stripping (the
+// original, wrong order here) let escaped-safe text resurface as literal,
+// unstripped "<script>" in the output — flagged by CodeQL as incomplete
+// sanitization / double-unescaping.
 function stripHtml(html: string): string {
-  return html
-    .replace(/<\/(p|div|br)>/gi, "\n")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
+  const decoded = html
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+    .replace(/&#39;/g, "'");
+  return decoded
+    .replace(/<\/(p|div|br)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
