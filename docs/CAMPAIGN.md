@@ -46,6 +46,59 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 4 continued (Phase E4: per-target status UI polish)
+
+**Summary:** PR #6 (Phase E3) still open and green (CI + CodeQL both
+clean after the path-injection fix). Picked **E4** next — the highest-
+priority unblocked `TODO`.
+
+**What shipped:** Scoped E4 by reading the dashboard's publishing-history
+list (`apps/web/app/dashboard/page.tsx`) against what `GET /api/posts/history`
+already returns. Found a real bug: every target whose status wasn't
+`"success"` rendered as a red failed badge, including `"pending"` — a
+scheduled post not yet due showed as a false failure. Fixed with a new
+`.badge-pending` (amber) style and a three-way branch instead of a
+binary one. Also wired up two fields the API already returned but the UI
+silently dropped: a failed target's `error` message (previously
+invisible) and a successful target's `latencyMs` (mirrors the composer's
+own "Posted in Xs" wording). `job.scheduledAt` now shows next to the
+timestamp when set. No backend changes — `posts.ts` already returned
+everything needed.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests, unaffected since this was a web-only change).
+Manual smoke test against a live server with three genuine states (not
+just visual inspection): a real immediate success (published to Bluesky),
+a real scheduled-but-not-due post (Mastodon, correctly shows "Pending"),
+and a real failure — scheduled a post to Twitter, disconnected Twitter,
+then fired `/internal/tick` to force a genuine since-disconnected-platform
+failure with a real error message, confirmed via a headless-browser
+screenshot that all three states render correctly and honestly. One
+near-miss during cleanup: an ad-hoc Prisma `deleteMany` intended to clear
+smoke-test data was scoped to `email: { contains: "demo@nexus.app" } }` —
+which matches the permanent demo account itself, not just smoke-test
+leftovers. The command was interrupted by the sandbox before it ran
+(confirmed via a fresh `findUnique` immediately after), but the close
+call is worth recording: any future cleanup should reseed via
+`npm run db:setup` (which fully overwrites to a known-good state) rather
+than hand-scoping deletes against real fixture data. Reseeded and
+confirmed the demo account and all 4 connections are intact.
+
+**Files touched:** `apps/web/app/dashboard/page.tsx`,
+`apps/web/app/globals.css`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open (it should be — this continues
+the same slice), commit this in reviewable slices, push. After E4:
+E5 (Instagram char-limit preview — needs standing up Instagram as a
+platform from scratch) and the rest of Phase F (F1 analytics, F2
+platform-mirrored bookmarks/likes, F3 empty-states/toasts — `PostCard`
+already has optimistic UI w/ rollback for like/bookmark, worth a scoping
+pass before assuming untouched, F5 landing page polish) remain. Check the
+Parked/WAITING-ON-HUMAN section of `BACKLOG.md` for any new credentials
+before picking the next phase.
+
 ### 2026-08-26 — Session 4 (Phase E3: media upload pipeline)
 
 **Summary:** PR #5 (Phase C2, carrying forward every phase through F6) was
