@@ -46,6 +46,81 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued a sixth time (Phase D2: stable cursor pagination)
+
+**Summary:** Checked PR #5's CI on the D1/D3 push before continuing — all
+green (`build-and-test`, both `Analyze` jobs `success`; `CodeQL` showed
+`neutral` rather than `success` this time, which was worth double-checking
+rather than assuming — re-read the review threads and confirmed no new
+findings appeared, so `neutral` here is just how that check reports "ran,
+nothing new," not a partial failure), `mergeable_state: "clean"`. Picked
+**D2** next per the backlog's own note — it's flagged "mostly done, verify
+under concurrent writes," and D1's new periodic sync makes that concern
+concrete for the first time (before D1, a feed was static after connect;
+now it keeps growing while a client might be mid-pagination).
+
+**What shipped:**
+- **The bug**: `routes/feed.ts`'s `/api/feed` ordered strictly by
+  `{ postedAt: "desc" }`. `postedAt` isn't unique — two posts easily land on
+  the same value (demo data, or a burst of real activity). Prisma's cursor
+  pagination anchors on `{ cursor: { id }, skip: 1 }` and then continues in
+  query order — but query order among rows tied on `postedAt` is
+  unspecified unless the `orderBy` itself breaks the tie. Nothing stops two
+  separate paginated queries (page 1's initial fetch, then page 2's
+  cursor-anchored fetch) from ordering a set of tied rows differently,
+  which silently skips or repeats a row across pages.
+- **The fix**: `orderBy: [{ postedAt: "desc" }, { id: "desc" }]` — a single
+  line. `id` is already unique, so this makes the full ordering
+  deterministic regardless of how many rows share a `postedAt`.
+- **Tests**: `apps/api/src/__tests__/feed.test.ts` (new — `/api/feed` had
+  *zero* test coverage before this) — 5 tests: platform filter, search
+  filter, bookmarked filter, cross-user isolation, and the main one:
+  create 10 posts all sharing the exact same `postedAt`, paginate through
+  with `limit=3` via the real cursor mechanism, assert every post is seen
+  exactly once with nothing skipped or duplicated across pages.
+- **An honest wrinkle, caught by actually trying to prove the test would
+  fail without the fix rather than just trusting it passed**: temporarily
+  reverted the `orderBy` to the old single-key version and reran the new
+  pagination test — it **still passed**. Traced this to SQLite (this
+  repo's dev/test datasource) happening to preserve insertion order for
+  tied rows within a single unmutated table across repeated queries in one
+  process — that's implementation behavior SQLite doesn't actually
+  guarantee, not a real absence of the bug, and Postgres (production) makes
+  no such promise at all — a different query plan, an index Postgres
+  decides to use, or a genuinely concurrent write landing between two
+  paginated requests can break ties differently there. Restored the fix
+  (confirmed the diff came back byte-identical to before the revert) and
+  documented this caveat directly in the test's own comment rather than
+  letting it quietly overclaim what it proves. The fix itself is still
+  correct and worth having — SQLite happening to hide the bug in this one
+  test scenario isn't a reason not to fix a real latent correctness issue
+  that Postgres would expose.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **96/96** across
+  15 files (5 new). Also specifically re-ran just the new pagination test
+  against the reverted (pre-fix) code to check whether it would catch the
+  bug — see the honest wrinkle above.
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean (unaffected, all 10 routes still prerender).
+- Manual smoke test against a locally running API: logged in as
+  `demo@nexus.app`, fetched two real pages of the feed via the actual
+  cursor mechanism (`limit=5` each), confirmed zero id overlap between the
+  pages.
+
+**Blockers:** None. No new env vars.
+
+**Files touched:** `apps/api/src/routes/feed.ts`,
+`apps/api/src/__tests__/feed.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — D1, D2, and D3
+are all DONE. **D4** (media rendering: images now, video later) and **D6**
+(non-naive search, replacing the `contains` scan) are the remaining
+unstarted Phase D items, independent of each other and of D1-D3. As
+always, check the Parked/WAITING-ON-HUMAN section for any credentials a
+human may have supplied since the last check before assuming Phase D is
+still the right phase to be in.
+
 ### 2026-08-26 — Session 3 continued a fifth time (Phase D1 + D3: periodic sync worker + dedup)
 
 **Summary:** Phase B (auth hardening) finished this session; checked PR #5
