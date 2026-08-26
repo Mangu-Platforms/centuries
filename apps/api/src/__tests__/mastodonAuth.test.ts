@@ -135,6 +135,31 @@ describe("Mastodon OAuth flow", () => {
       expect(res.statusCode).toBe(401);
       await app.close();
     });
+
+    it("rate-limits repeated calls (CodeQL: missing rate limiting)", async () => {
+      appsCreateMock.mockResolvedValue({ clientId: "cid", clientSecret: "secret" });
+
+      const app = await buildApp();
+      const { token, userId } = await registerUser(app);
+
+      const statuses: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/connections/mastodon/register",
+          headers: { authorization: `Bearer ${token}` },
+          payload: { instance: "mastodon.social" },
+        });
+        statuses.push(res.statusCode);
+      }
+
+      // 5/minute is the configured limit — the 6th call in the same window must be rejected.
+      expect(statuses.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);
+      expect(statuses[5]).toBe(429);
+
+      await prisma.user.delete({ where: { id: userId } });
+      await app.close();
+    });
   });
 
   describe("GET /api/connections/mastodon/callback", () => {
@@ -261,6 +286,22 @@ describe("Mastodon OAuth flow", () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/connections/mastodon/callback?code=x&state=y" });
       expect(res.statusCode).not.toBe(401);
+      await app.close();
+    });
+
+    it("rate-limits repeated calls (CodeQL: missing rate limiting) — this is the only guard since it's unauthenticated by design", async () => {
+      const app = await buildApp();
+
+      const statuses: number[] = [];
+      for (let i = 0; i < 11; i++) {
+        const res = await app.inject({ method: "GET", url: `/api/connections/mastodon/callback?code=x&state=y${i}` });
+        statuses.push(res.statusCode);
+      }
+
+      // 10/minute is the configured limit — the 11th call in the same window must be rejected.
+      expect(statuses.slice(0, 10).every((s) => s === 302)).toBe(true);
+      expect(statuses[10]).toBe(429);
+
       await app.close();
     });
   });

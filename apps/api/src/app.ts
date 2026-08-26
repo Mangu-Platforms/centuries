@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { config, PLATFORMS } from "./config.js";
 import { prisma } from "./db.js";
 import { registerAuth } from "./plugins/auth.js";
@@ -38,6 +39,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
+  // global: false — this doesn't rate-limit every route by default, it only
+  // makes the `app.rateLimit(...)` preHandler decorator available for
+  // routes that opt in explicitly (see routes/mastodonAuth.ts). Blanket
+  // rate limiting across every route is Phase B3's job.
+  await app.register(rateLimit, { global: false });
   await registerAuth(app);
 
   // Uncaught errors (thrown exceptions, Fastify schema/body-parsing

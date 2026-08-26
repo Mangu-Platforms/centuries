@@ -45,7 +45,13 @@ function connectionsPageUrl(query: Record<string, string>): string {
 }
 
 export async function mastodonAuthRoutes(app: FastifyInstance): Promise<void> {
-  app.post("/api/connections/mastodon/register", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post(
+    "/api/connections/mastodon/register",
+    // Rate-limited ahead of auth: this triggers an outbound dynamic app
+    // registration against whatever instance is named, so it must be
+    // bounded regardless of whether the caller's token is valid.
+    { preHandler: [app.rateLimit({ max: 5, timeWindow: "1 minute" }), app.authenticate] },
+    async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0].message });
 
@@ -86,13 +92,20 @@ export async function mastodonAuthRoutes(app: FastifyInstance): Promise<void> {
     authorizeUrl.searchParams.set("state", encodedState);
 
     return reply.send({ authorizeUrl: authorizeUrl.toString() });
-  });
+    },
+  );
 
   // No app.authenticate here by design: the instance redirects the user's
   // browser to this URL directly, which can't carry an Authorization
   // header. The encrypted `state` param is the only credential this route
   // trusts (see OAuthState above).
-  app.get("/api/connections/mastodon/callback", async (request, reply) => {
+  app.get(
+    "/api/connections/mastodon/callback",
+    // No app.authenticate (see above), so this is the only guard against
+    // abuse — bounds brute-force guessing against the encrypted `state`
+    // param and repeated token-exchange attempts against the instance.
+    { preHandler: [app.rateLimit({ max: 10, timeWindow: "1 minute" })] },
+    async (request, reply) => {
     const query = request.query as { code?: string; state?: string; error?: string; error_description?: string };
 
     if (query.error) {
@@ -167,5 +180,6 @@ export async function mastodonAuthRoutes(app: FastifyInstance): Promise<void> {
       const message = err instanceof Error ? err.message : "Failed to complete Mastodon authorization";
       return reply.redirect(connectionsPageUrl({ mastodonError: message }));
     }
-  });
+    },
+  );
 }
