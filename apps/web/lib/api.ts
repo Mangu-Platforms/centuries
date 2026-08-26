@@ -108,6 +108,21 @@ export const api = {
 
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 
+  requestPasswordReset: (email: string) =>
+    request<{ ok: boolean }>("/api/auth/password-reset/request", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  confirmPasswordReset: (token: string, newPassword: string) =>
+    request<{ ok: boolean }>("/api/auth/password-reset/confirm", {
+      method: "POST",
+      body: JSON.stringify({ token, newPassword }),
+    }),
+
+  requestEmailVerification: () =>
+    request<{ ok: boolean; alreadyVerified?: boolean }>("/api/auth/email/verify/request", { method: "POST" }),
+
   updateProfile: (data: Partial<Pick<User, "displayName" | "bio" | "theme">>) =>
     request<{ user: User }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(data) }),
 

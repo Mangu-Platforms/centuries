@@ -7,6 +7,7 @@ export interface User {
   bio: string;
   avatarUrl: string;
   theme: "light" | "dark";
+  emailVerifiedAt: string | null;
 }
 
 export interface Platform {
