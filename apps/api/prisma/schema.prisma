@@ -22,6 +22,13 @@ model User {
   theme        String   @default("light")
   createdAt    DateTime @default(now())
 
+  // Account lockout (Phase B3): counts consecutive failed login attempts,
+  // reset to 0 on a successful login. lockedUntil is set once the count
+  // hits the threshold and cleared (implicitly, by expiring) once it's
+  // passed — see lib/loginLockout.ts.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
   connections   Connection[]
   feedPosts     FeedPost[]
   publishJobs   PublishJob[]
