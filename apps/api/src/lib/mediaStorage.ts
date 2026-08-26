@@ -23,9 +23,18 @@ export const ALLOWED_MEDIA_MIME_TYPES = Object.keys(EXT_BY_MIME);
 
 const UPLOAD_DIR = process.env.MEDIA_UPLOAD_DIR || path.resolve(process.cwd(), "uploads");
 
-/** Resolves a storage key to its on-disk path — shared with the GET /uploads/:key serving route. */
+/**
+ * Resolves a storage key to its on-disk path — shared with the GET
+ * /uploads/:key serving route, whose `key` comes straight off the request
+ * (the route also regex-validates it against the UUID.ext shape this
+ * module always generates, but that check lives in the route, not here).
+ * path.basename() strips any directory component regardless of what the
+ * input looks like, so this can never resolve outside UPLOAD_DIR no matter
+ * what a caller passes — the single choke point both the trusted write
+ * path (a freshly generated key) and the untrusted read path go through.
+ */
 export function localUploadPath(key: string): string {
-  return path.join(UPLOAD_DIR, key);
+  return path.join(UPLOAD_DIR, path.basename(key));
 }
 
 // Local-disk storage (Phase E3): the only implementation today, same
