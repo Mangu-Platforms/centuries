@@ -13,6 +13,7 @@ import { connectionRoutes } from "./routes/connections.js";
 import { mastodonAuthRoutes } from "./routes/mastodonAuth.js";
 import { feedRoutes } from "./routes/feed.js";
 import { postRoutes } from "./routes/posts.js";
+import { internalRoutes } from "./routes/internal.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 // Side-effect imports: register each live connector with the connector
 // registry (see connectors/registry.ts). Each live connector as it's
@@ -100,6 +101,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(mastodonAuthRoutes);
   await app.register(feedRoutes);
   await app.register(postRoutes);
+  await app.register(internalRoutes);
   await app.register(dashboardRoutes);
 
   return app;
