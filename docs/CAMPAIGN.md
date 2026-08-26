@@ -46,6 +46,110 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued a ninth time (Phase E6: idempotency keys, plus fixing a test-suite flake my own test exposed)
+
+**Summary:** Checked PR #5's CI on the E2 push before continuing — green
+across all 4 checks, `mergeable_state: "clean"`, PR now 49 commits /
+~5950 additions. Picked **E6** (idempotency keys) over E5 (Instagram
+char-limit preview) — E5 turned out bigger than it looked, since Instagram
+isn't wired as a platform anywhere in the codebase yet (unlike Threads,
+which already is), so "just add the char limit" would mean standing up a
+whole new platform's demo data/UI entries for a card with no connector
+behind it. E6 had a crisp, well-understood shape instead.
+
+**What shipped:**
+- **`PublishJob.idempotencyKey`** (nullable, `@@unique([userId,
+  idempotencyKey])` — SQL's normal null-handling means multiple `null`s
+  never collide, so a caller that never sends a key is completely
+  unaffected). `POST /api/posts` accepts an optional `idempotencyKey`; a
+  repeated request with the same one returns the *original* job's current
+  state (`200`, not `201` — nothing new was created) instead of publishing
+  again.
+- **Actually race-safe, not just check-then-create**: the obvious
+  "look up by key, create if missing" has a real TOCTOU gap — two
+  requests can both pass the lookup before either commits. Handled by
+  catching the unique-constraint violation (`P2002`) the *second* create
+  hits and turning it into "fetch and return whichever request won" rather
+  than a 500. Verified this actually matters, not just in theory: fired two
+  genuinely simultaneous real `curl` requests (backgrounded with `&`, not
+  sequential `await`s) with the same key against a live server — both
+  returned the same `jobId` (one showed `"pending"`, the other `"success"`,
+  since one request's response was read mid-flight while the winner's
+  publish was still running — a legitimate snapshot of an in-flight job,
+  not a bug), and confirmed via `/api/feed` that exactly one post existed
+  afterward.
+- **Web**: `Composer.tsx` generates a UUID once per mount via
+  `useState(() => crypto.randomUUID())`. Confirmed this gives the right
+  lifecycle by checking how it's actually rendered
+  (`dashboard/layout.tsx`'s `{composerOpen && <Composer .../>}`) — the
+  component fully unmounts on close, so a fresh compose session always
+  gets a fresh key, while clicking "Post" again after a dropped response
+  within the *same* open session reuses the same one (a correct retry, not
+  a new post). `lib/api.ts`'s `publish()` gained the parameter.
+- **A real test-suite flake, found and root-caused by my own new test**:
+  the "truly concurrent requests" test (two real `Promise.all`-fired HTTP
+  requests within one test, needed to actually exercise the P2002 recovery
+  path rather than just the sequential-retry path) started making the
+  *full* suite intermittently fail — not in its own file, but in
+  `internal.test.ts`, with a response missing an expected field entirely.
+  Root-caused properly rather than shrugging it off as "flaky": stashed
+  the E6 changes, ran the full suite twice on the prior (E2) commit —
+  clean both times — confirming this was newly introduced, not
+  pre-existing. The cause: vitest runs test *files* in parallel by
+  default, and this repo's tests have no per-file DB isolation — all 17
+  files hit the same physical `./dev.db` SQLite file. SQLite is
+  single-writer; a write colliding with another file's concurrent write
+  fails immediately ("database is locked") rather than queuing, and that
+  failure can surface in whatever unrelated file happened to be writing at
+  that instant — exactly the `internal.test.ts` symptom. First attempt at
+  a fix (`PRAGMA busy_timeout` set once in `db.ts`) didn't work and was
+  reverted: Prisma's query engine keeps an internal connection pool, and a
+  PRAGMA applied via one raw query only takes effect on *that* specific
+  pooled connection, not the others real concurrent load would actually
+  use. (This attempt also briefly broke every test file: `PRAGMA busy_timeout
+  = N` returns a result row, so it needs `$queryRawUnsafe`, not
+  `$executeRawUnsafe` — caught immediately since the whole suite failed to
+  even load, not silently wrong.) The real fix: `apps/api/vitest.config.ts`
+  (new) with `fileParallelism: false` — tests within a file were already
+  sequential by default, this just extends that to files too. Confirmed by
+  running the full suite twice clean after the fix (not just once).
+- **Tests**: 4 new tests in `apps/api/src/__tests__/posts.test.ts` (new
+  describe block) — a retried request returns the original job without
+  creating a second one or publishing again, the genuinely-concurrent race
+  case above, a different key creates a real separate post, omitting the
+  key entirely still works (backward compatible, multiple keyless posts
+  coexist fine).
+
+**Commands run (all green, after the flake was fixed):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **111/111**
+  across 17 files (4 new), run twice to confirm no flake remained.
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean, all 10 routes still prerender.
+- Manual smoke test against a locally running API: `demo@nexus.app` login
+  unaffected; fired two real concurrent `curl -X POST /api/posts` (via
+  shell backgrounding, not sequential) with the same `idempotencyKey` —
+  both returned the same `jobId`; confirmed via `/api/feed` that exactly
+  one post was created despite the real race. Deleted the throwaway
+  post/job afterward; stopped the dev server.
+
+**Blockers:** None. No new env vars.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/routes/posts.ts`, `apps/api/vitest.config.ts` (new),
+`apps/api/src/__tests__/posts.test.ts`, `apps/web/lib/api.ts`,
+`apps/web/components/Composer.tsx`, `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — Phase E now
+has E1, E2, and E6 all `DONE`. **E3** (media upload pipeline) is the
+biggest remaining Phase E lift; **E4** (per-target status in the composer/
+history UI — the API already returns it, this is UI polish) and **E5**
+(Instagram char-limit preview — now understood to actually require
+standing up Instagram as a new platform, not a one-line tweak) are the
+other open items. Phase F (product surface: empty states, optimistic UI,
+a Playwright smoke test) is also fully open and may be worth a look if
+Phase E's remaining items all feel bigger than a clean single-session
+slice. As always, check Parked/WAITING-ON-HUMAN for new credentials first.
+
 ### 2026-08-26 — Session 3 continued an eighth time (Phase E2: scheduled send worker, and a second real bug found by reading the existing code)
 
 **Summary:** Checked PR #5's CI on the D4 push before continuing — green
