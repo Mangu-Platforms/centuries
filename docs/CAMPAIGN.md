@@ -46,6 +46,110 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued a fifth time (Phase D1 + D3: periodic sync worker + dedup)
+
+**Summary:** Phase B (auth hardening) finished this session; checked PR #5
+was still green/mergeable/no unresolved review threads before continuing
+(it was — CodeQL, build-and-test, both Analyze jobs all `success`,
+`mergeable_state: "clean"`, all 5 review threads already resolved from the
+earlier CodeQL fix). No way from inside this sandbox to check whether a
+human has supplied any outstanding Phase C credentials (that's the actual
+deployment's env, not this dev container's), so moved to Phase D per the
+backlog's own next-step note. Picked **D1** (a sync worker — today
+`fetchTimeline` only ever runs once, at connect time, so a feed never
+updates after that) — but D1 without dedup would insert duplicate posts on
+every tick, so **D3** (dedup by `(platform, externalId)`) came first as its
+prerequisite, in the same slice.
+
+**What shipped:**
+- **D3 — schema**: `@@unique([userId, platform, externalId])` on
+  `FeedPost`. Before applying it, actually checked the dev DB for existing
+  duplicates with a raw `GROUP BY ... HAVING COUNT(*) > 1` query (found
+  none) rather than assuming `prisma db push`'s generic data-loss warning
+  didn't apply — then applied with `--accept-data-loss` once confirmed
+  safe.
+- **D3 — dedup helper**: `lib/timelineImport.ts` gained
+  `importTimelinePosts()`, extracted from the existing initial-import
+  logic and now upsert-based: a new `externalId` inserts, an existing one
+  gets `content`/`authorName`/`authorAvatar`/engagement counts refreshed
+  but never `liked`/`bookmarked`/`isOwn` (those are local user state with
+  no remote source of truth to overwrite them from). Runs upserts
+  sequentially rather than via a Prisma `createMany({skipDuplicates})`
+  batch — SQLite doesn't support `skipDuplicates` at all, and sequential
+  upserts behave identically across SQLite (dev/test) and Postgres (prod)
+  rather than depending on provider-specific batch semantics.
+  `importInitialTimeline` is now a thin wrapper: fetch (with its existing
+  try/catch → `status: "error"` + warning on failure), then call the new
+  shared helper.
+- **D1 — sync engine**: `lib/sync.ts` (new). `syncConnection()` resolves
+  the connector exactly the way connect-time does (demo vs. live,
+  credential-gated — a demo connection stays on the demo connector
+  forever, unchanged behavior), fetches, imports via the dedup helper, and
+  manages `Connection.status`: a fetch failure flips it to `"error"`; a
+  connection already in `"error"` is retried on the next tick too (bounded
+  self-healing — a transient network blip or momentary rate limit doesn't
+  require the user to manually reconnect), flipping back to `"active"` on
+  success. `syncAllConnections()` runs it across every connection
+  sequentially and aggregates `{connectionsSynced, postsImported,
+  connectionsFailed}`.
+- **D1 — scheduler**: `lib/syncScheduler.ts` — a plain `setInterval` (5
+  minutes, a fixed constant, same precedent as B1's token TTLs rather than
+  a new env var), `.unref()`'d so it never blocks a graceful shutdown.
+  Started from `server.ts` only, right after `app.listen()` succeeds, and
+  stopped in the SIGINT/SIGTERM handler — deliberately **not** started
+  from `app.ts`/`buildApp()`, which every test calls directly, so no test
+  run ever spawns a background timer or triggers an unawaited sync tick
+  outside what it's asserting on.
+- **Tests**: `apps/api/src/__tests__/sync.test.ts` (new, 5 tests) — a
+  controllable fake connector (registered via the existing
+  `registerLiveConnector`/`__resetRegistryForTests` test seam from
+  `registry.test.ts`) proves: a second sync only counts genuinely new
+  posts, not re-fetched ones; engagement counts refresh on re-sync while
+  `liked`/`bookmarked` survive untouched; a failing connector flips status
+  to `"error"` and a subsequently-succeeding one flips it back to
+  `"active"`; `syncAllConnections` aggregates correctly across a mix of
+  succeeding and failing connections. A fifth test uses the **real** demo
+  connector (no fake) to prove the whole path also dedupes correctly
+  end-to-end without any mocking.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **91/91** across
+  14 files (5 new).
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean (unaffected by this API-only slice, all 10 routes
+  still prerender).
+- Manual smoke test: confirmed `demo@nexus.app` still logs in. Rather than
+  waiting out the real 5-minute scheduler interval, invoked
+  `syncAllConnections()` directly against the live dev DB (not the test
+  DB) via a scratch script — `connectionsSynced: 4` (the demo user's 4
+  seeded connections), `postsImported: 0` both on a first and immediate
+  second call (correct: the demo connector's output is deterministic per
+  platform+handle, so nothing "new" ever appears from it — periodic
+  syncing only matters for live connectors receiving genuinely new remote
+  posts), `feedPost` count unchanged across both calls (80 before and
+  after, twice), and every connection's `status` confirmed still
+  `"active"` afterward — proving the sync path doesn't accidentally break
+  demo connections it touches. Scratch script and its output deleted
+  afterward; dev server stopped.
+
+**Blockers:** None. No new env vars.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/lib/timelineImport.ts`, `apps/api/src/lib/sync.ts` (new),
+`apps/api/src/lib/syncScheduler.ts` (new), `apps/api/src/server.ts`,
+`apps/api/src/__tests__/sync.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — D1 and D3 are
+DONE. **D2** (stable cursor pagination) is marked "mostly done, verify
+under concurrent writes" — worth a dedicated look now that D1 means the
+feed can genuinely change *while* a client is paginating through it, which
+wasn't possible before this session (the feed was static after connect).
+**D4** (media rendering) and **D6** (non-naive search, replacing the
+`contains` scan) are the other unstarted Phase D items and don't depend on
+D1/D3. As always, check the Parked/WAITING-ON-HUMAN section in
+`docs/BACKLOG.md` for any credentials a human may have supplied since the
+last check.
+
 ### 2026-08-26 — Session 3 continued a fourth time (Phase B5: change password — Phase B complete)
 
 **Summary:** Same session as B1–B4 above. B5 was the last Phase B item;

@@ -56,9 +56,9 @@ multiple items at once.
 
 | ID | Item | Status | Notes |
 | --- | --- | --- | --- |
-| D1 | Sync worker (pull timelines on a cadence) | TODO | `/api/feed` reads DB only |
+| D1 | Sync worker (pull timelines on a cadence) | DONE (2026-08-26) | `src/lib/sync.ts` — `syncConnection()` resolves the same connector a connect-time fetch would (demo or live, credential-gated, unchanged behavior), imports via the dedup-aware helper, flips a connection to `status: "error"` on failure and self-heals it back to `"active"` on the next successful sync (so a transient network blip doesn't require the user to reconnect). `syncAllConnections()` runs it across every connection, including ones already in `"error"` (bounded retry, not a hammering concern at a 5-minute cadence). `src/lib/syncScheduler.ts` — an `unref()`'d `setInterval` (5 min), started only from `server.ts` (the real long-running process), never from `app.ts`/`buildApp()` — tests never spawn a background timer. No new env vars; the interval is a fixed constant, same precedent as B1's token TTLs. |
 | D2 | Stable cursor pagination | TODO | Mostly done; verify under concurrent writes |
-| D3 | Dedup by `(platform, externalId)` | TODO | Add unique constraint + migration |
+| D3 | Dedup by `(platform, externalId)` | DONE (2026-08-26) | `@@unique([userId, platform, externalId])` on `FeedPost` (scoped per-user, not global — two different NEXUS users legitimately each get their own row for the same remote post). `src/lib/timelineImport.ts` gained `importTimelinePosts()`, a shared upsert-based dedup helper used by both the initial connect-time import and D1's periodic sync: a genuinely new post is inserted, an already-seen one has its engagement counts/content refreshed but never its local `liked`/`bookmarked`/`isOwn` state. Verified the existing dev DB had zero duplicate `(userId, platform, externalId)` rows before applying the constraint (`prisma db push --accept-data-loss`, confirmed safe first via a raw `GROUP BY ... HAVING COUNT(*) > 1` query, not just assumed). |
 | D4 | Media rendering (images, then video) | TODO | |
 | D5 | Reply thread drawer | TODO | Read-only first |
 | D6 | Non-naive search | TODO | Replace `contains` scan |
