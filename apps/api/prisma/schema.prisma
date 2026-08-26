@@ -129,6 +129,12 @@ model FeedPost {
   user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   connection Connection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
 
+  // Phase D3: the same remote post must never appear twice in a user's feed
+  // — without this, a periodic sync (Phase D1) re-fetching an unchanged
+  // timeline would insert duplicates every tick. Scoped per user (not
+  // globally) since two different NEXUS users legitimately each get their
+  // own FeedPost row for the same underlying remote post.
+  @@unique([userId, platform, externalId])
   @@index([userId, postedAt])
 }
 
