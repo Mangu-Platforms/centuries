@@ -2,8 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { PLATFORMS, isPlatform, type PlatformId } from "../config.js";
-import { getConnector } from "../connectors/registry.js";
-import { decryptSecret } from "../lib/crypto.js";
+import { attemptPublish } from "../lib/publish.js";
 
 const publishSchema = z.object({
   content: z.string().min(1, "Post content is required").max(5000),
@@ -42,58 +41,45 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
+    // Phase E2: a post scheduled for the future must not be sent now — it
+    // used to be (scheduledAt was stored but never actually checked before
+    // publishing). Every target starts "pending" regardless; only a
+    // due-or-unscheduled post is attempted immediately here. A future one
+    // is picked up later by POST /internal/tick (routes/internal.ts).
+    const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
+    const isFutureSend = scheduledDate !== null && scheduledDate.getTime() > Date.now();
+
     const job = await prisma.publishJob.create({
       data: {
         userId: request.user.sub,
         content,
         mediaUrls: JSON.stringify(mediaUrls),
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        scheduledAt: scheduledDate,
       },
     });
 
+    const targets = await Promise.all(
+      platforms.map((platform) => prisma.publishTarget.create({ data: { jobId: job.id, platform } })),
+    );
+
     const results: Array<{ platform: PlatformId; status: string; externalId: string; error: string; latencyMs: number }> = [];
 
-    for (const platform of platforms) {
-      const conn = byPlatform.get(platform)!;
-      try {
-        const hasCredentials = Boolean(conn.appPasswordEnc || conn.accessTokenEnc);
-        const res = await getConnector(platform, hasCredentials).publish(
-          {
-            handle: conn.handle,
-            instance: conn.instance,
-            appPassword: conn.appPasswordEnc ? decryptSecret(conn.appPasswordEnc) : undefined,
-            accessToken: conn.accessTokenEnc ? decryptSecret(conn.accessTokenEnc) : undefined,
-          },
-          content,
-          mediaUrls,
-        );
-        await prisma.publishTarget.create({
-          data: { jobId: job.id, platform, status: "success", externalId: res.externalId, latencyMs: res.latencyMs },
-        });
-        // Surface the user's own post in the unified feed.
-        await prisma.feedPost.create({
-          data: {
-            userId: request.user.sub,
-            connectionId: conn.id,
-            platform,
-            externalId: res.externalId,
-            authorHandle: conn.handle,
-            authorName: conn.displayName || conn.handle,
-            authorAvatar: "",
-            content,
-            mediaUrls: JSON.stringify(mediaUrls),
-            isOwn: true,
-            postedAt: new Date(),
-          },
-        });
-        results.push({ platform, status: "success", externalId: res.externalId, error: "", latencyMs: res.latencyMs });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
-        await prisma.publishTarget.create({
-          data: { jobId: job.id, platform, status: "failed", error: message },
-        });
-        results.push({ platform, status: "failed", externalId: "", error: message, latencyMs: 0 });
+    for (const target of targets) {
+      const platform = target.platform as PlatformId;
+      if (isFutureSend) {
+        results.push({ platform, status: "pending", externalId: "", error: "", latencyMs: 0 });
+        continue;
       }
+      const conn = byPlatform.get(platform)!;
+      const outcome = await attemptPublish({
+        targetId: target.id,
+        userId: request.user.sub,
+        connection: conn,
+        platform,
+        content,
+        mediaUrls,
+      });
+      results.push({ platform, ...outcome });
     }
 
     return reply.code(201).send({ jobId: job.id, results });
