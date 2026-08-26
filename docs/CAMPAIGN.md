@@ -46,6 +46,113 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 (Phase B1: rotating refresh tokens)
+
+**Summary:** Picked B1 next per the previous session's "next step" — auth
+hardening, no external credentials needed. Access tokens were previously
+JWTs valid for 7 days with no revocation mechanism; an XSS bug or a leaked
+token would grant a week of access with no way to cut it off short of
+rotating `JWT_SECRET` (which logs out every user, not just the affected
+one).
+
+**What shipped:**
+- **Schema:** new `RefreshToken` model (`apps/api/prisma/schema.prisma`) —
+  `tokenHash` (SHA-256 of the raw token, unique), `expiresAt`, `revokedAt`,
+  `replacedByHash` (set when rotated, so a reuse of an already-rotated token
+  is a detectable signal), `userAgent`/`ipAddress` (unused yet, laid in for
+  Phase B4's session-list UI), `onDelete: Cascade` from `User`. SHA-256 (not
+  bcrypt) is correct here: refresh tokens are 32 random bytes, not a
+  user-chosen secret, so there's no low-entropy dictionary to slow down.
+- **`apps/api/src/lib/refreshTokens.ts`** (new) — `issueRefreshToken()`,
+  `rotateRefreshToken()` (returns a discriminated union: `ok` / `invalid` /
+  `expired` / `reused`), `revokeRefreshToken()`, `revokeAllForUser()`. On
+  `reused`, every one of that user's active tokens is revoked, not just the
+  replayed one — reuse of a rotated-away token means the *original* token
+  leaked (stolen cookie, replayed request), so every session it could have
+  spawned is suspect.
+- **`apps/api/src/routes/auth.ts`** — access token TTL dropped from 7d to
+  15m. Register/login now call a shared `issueSession()` that mints the
+  access token *and* sets the refresh cookie. New `POST /api/auth/refresh`
+  (rotates the cookie, mints a fresh access token) and `POST
+  /api/auth/logout` (revokes the presented token, clears the cookie;
+  intentionally not behind `app.authenticate` — a user with an already-
+  expired access token still needs to be able to end their session, and the
+  route only ever acts on the cookie's own token). Cookie flags:
+  `httpOnly`, `path=/api/auth` (never sent to any other route),
+  `sameSite=None; secure` in prod (Vercel web + Railway API is cross-origin
+  by design, per `DEPLOY.md`), `sameSite=Lax` in dev (no HTTPS locally).
+- **`apps/api/src/app.ts`** — registered `@fastify/cookie` (no `secret`
+  option: the cookie's value is itself a high-entropy opaque token, so it
+  doesn't need a second signature the way session data would).
+- **Web (`apps/web/lib/api.ts`, `lib/auth.tsx`):** `request()` now sends
+  `credentials: "include"` on every call and, on a 401 (except login's own
+  wrong-password 401), transparently calls a new `tryRefresh()` and retries
+  the original request once. Concurrent 401s share one in-flight refresh
+  promise rather than each firing their own — the refresh token rotates on
+  use, so two independent refresh calls racing on the same stale cookie
+  would make the second one look like a token replay and revoke the user's
+  own session. `auth.tsx`'s `refresh()` callback no longer skips `api.me()`
+  when there's no local access token in `localStorage`; it always calls
+  `api.me()`, letting the request layer's silent refresh restore a session
+  from the httpOnly cookie alone (a fresh tab, or a tab reopened after the
+  15-minute access token expired while the app was closed, no longer forces
+  a re-login). `logout()` is now `async`, calls the new `api.logout()`
+  endpoint before clearing local state (best-effort — local state clears
+  either way even if the network call fails).
+- **Tests:** `apps/api/src/__tests__/refreshTokens.test.ts` (new, 10 tests)
+  — cookie shape/flags/TTL on register and login, rotation issues a new
+  cookie value, the rotated access token works on a protected route,
+  rejects no-cookie/garbage-cookie/expired-token refresh attempts, reuse of
+  an already-rotated token is rejected *and* revokes a second, independent
+  session for the same user (simulating a second device), logout revokes
+  the token so a subsequent refresh 401s, logout with no cookie is a
+  harmless no-op.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npm test` — **56/56** vitest tests
+  across 9 files (10 new).
+- `apps/web`: `npx tsc --noEmit` clean. `npm run lint` (`next lint`) clean.
+  `npm run build` — clean production build, all 8 routes still prerender
+  (including the ones using `useSearchParams`, unaffected by this change).
+- Manual smoke test against a locally running API (`npm run dev`,
+  `prisma db push` confirmed already in sync): logged in as
+  `demo@nexus.app`/`password123` via `curl` with a cookie jar — confirmed
+  the `nexus_refresh` cookie is set `HttpOnly; Path=/api/auth; SameSite=Lax`
+  (dev, correctly not `Secure`/`None` without HTTPS); called `/api/auth/
+  refresh` and confirmed the cookie's *value* changed (true rotation) and
+  the returned access token worked against `/api/auth/me`; called
+  `/api/auth/logout` and confirmed a subsequent `/api/auth/refresh` with the
+  same (now-revoked) cookie correctly 401s. (One artifact from this manual
+  test, not a bug: the login and refresh calls landed in the same wall-clock
+  second, so the two access-token JWTs came out byte-identical — expected
+  JWT determinism, same header+payload+secret always signs the same way at
+  1-second `iat` granularity; the refresh *cookie*, which is what actually
+  carries the security property here, did change value both times.) Dev
+  server stopped and scratch cookie/log files cleaned up afterward; no
+  stored data left behind.
+
+**Blockers:** None. No new env vars needed — the cookie's `secure`/
+`sameSite` derive from the existing `config.isProd`, already set correctly
+per-environment.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/lib/refreshTokens.ts` (new), `apps/api/src/routes/auth.ts`,
+`apps/api/src/app.ts`, `apps/api/package.json`, `package-lock.json` (via
+`npm install @fastify/cookie`), `apps/web/lib/api.ts`,
+`apps/web/lib/auth.tsx`, `apps/api/src/__tests__/refreshTokens.test.ts`
+(new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — B1 is DONE.
+Take **B2** (password reset + email verification, console transport in dev)
+or **B3** (rate-limit auth routes + lockout — `@fastify/rate-limit` is
+already a dependency and already used narrowly on the Mastodon OAuth
+routes, so B3 is mostly "apply the same pattern to `/api/auth/register`,
+`/login`, `/refresh`") next, in either order — neither needs external
+credentials. B4 (session list / logout-all) is also now unblocked since B1
+shipped `revokeAllForUser()` and per-token `userAgent`/`ipAddress`, but a
+session-list *UI* probably reads better after B3's lockout semantics exist,
+so do it after B2/B3 rather than immediately.
+
 ### 2026-08-26 — Session 2, addendum 2: CodeQL findings on PR #5, fixed (took two attempts)
 
 CodeQL ran on PR #5's push and flagged 3 high-severity findings, all in new

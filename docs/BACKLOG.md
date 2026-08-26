@@ -35,10 +35,10 @@ multiple items at once.
 
 | ID | Item | Status | Notes |
 | --- | --- | --- | --- |
-| B1 | Refresh tokens | TODO | httpOnly cookie or rotating refresh table |
+| B1 | Refresh tokens | DONE (2026-08-26) | Access tokens now 15m JWTs (was 7d). New `RefreshToken` table (hashed, rotating, reuse-detection) backs a `nexus_refresh` httpOnly cookie scoped to `/api/auth` (`SameSite=None; Secure` in prod for the cross-origin Vercel/Railway split, `Lax` in dev). `POST /api/auth/refresh` rotates the cookie + mints a new access token; reuse of an already-rotated token revokes *all* of that user's sessions, not just the reused one. `POST /api/auth/logout` revokes the presented token. Web: `lib/api.ts`'s `request()` now sends `credentials: "include"` and silently retries a single 401 through `tryRefresh()` (a shared in-flight promise, so concurrent 401s across components don't race two refreshes against the same rotating cookie); `lib/auth.tsx`'s `refresh()` always calls `api.me()` on mount (no more "skip if no local token" guard), so a session survives a fresh tab / reload with no access token in memory as long as the refresh cookie is valid; `logout()` is now async and calls `api.logout()` before clearing local state. 10 new API tests (`refreshTokens.test.ts`) cover cookie flags/TTL, rotation, reuse-detection (incl. revoking a second, independent session), expiry, and logout. No new env vars — cookie `secure`/`sameSite` derive from existing `config.isProd`. |
 | B2 | Password reset + email verification | TODO | Provider interface, console transport in dev |
 | B3 | Rate-limit auth routes + lockout | TODO | `@fastify/rate-limit` |
-| B4 | Session list / logout-all | TODO | Needs B1 first |
+| B4 | Session list / logout-all | TODO | Unblocked now that B1 is done — `RefreshToken` already has `userAgent`/`ipAddress` per row for a session-list UI; "logout all" is `revokeAllForUser()` in `lib/refreshTokens.ts`, already written and used by the reuse-detection path, just needs a route |
 | B5 | Settings: change password, display name, theme | TODO | Theme field exists; wire UI |
 
 ## Phase C — Live connectors
