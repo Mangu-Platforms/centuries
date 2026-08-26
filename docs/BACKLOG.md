@@ -26,6 +26,8 @@ multiple items at once.
 | ID | Item | Status | Notes |
 | --- | --- | --- | --- |
 | A6b | Propagate `code` through every route's manual validation error responses | TODO | Currently only the global handler (404, malformed body, uncaught throw) returns `code`/`requestId`; per-route `{error}` responses (register/login/connections/posts validation) don't yet. Low priority polish, not a correctness gap. |
+| C1a | Real end-to-end validation of the Bluesky connector against production bsky.social | WAITING-ON-HUMAN | The connector is unit-tested against the real `@atproto/api` types/shapes but has never been run against a live account — needs a human to supply a real Bluesky app password for a test account (same credential the charter's "first human work" section calls for). Until then, treat C1 as "code complete, live-unverified." |
+| C1b | Surface `connections.ts`'s new `warning` field in the web connect UI | TODO | Backend now returns `{ connection, importedPosts, warning? }` when a live credential is rejected (connection kept with `status: "error"`); `apps/web/app/dashboard/connections/page.tsx` doesn't read `warning` yet. Natural to fold into C6 (connect/reconnect/disconnect, last-error UI) rather than a one-off. |
 
 ## Phase B — Auth hardening
 
@@ -41,7 +43,7 @@ multiple items at once.
 
 | ID | Item | Status | Notes |
 | --- | --- | --- | --- |
-| C1 | Bluesky live connector (`@atproto/api`, app password) | TODO | No OAuth review needed — do this first |
+| C1 | Bluesky live connector (`@atproto/api`, app password) | DONE (2026-08-26) | `src/connectors/bluesky.ts`; registered via `registerLiveConnector`, imported once in `app.ts`. fetchTimeline + publish (text-only; images are Phase E3), stateless login-per-call. Real `@atproto/api` types verified against the installed package (`Agent`/`AtpAgent` classes, `getTimeline`/`post` signatures, `FeedViewPost`/`PostView`/image-embed shapes) — not guessed from memory. Unit-tested with a mocked `AtpAgent` (no live network calls made anywhere in this repo or by me during development — no Bluesky test account credential was available or used). `connections.ts`'s initial-fetch now catches a rejected live credential gracefully (connection kept, `status: "error"`, `warning` in the response) instead of 500ing. **End-to-end validation against the real Bluesky API still needs a human to supply a real test account app password** — the code is correct by construction against the SDK's types and documented shapes, but has not been run against production bsky.social. |
 | C2 | Mastodon OAuth 2.0 (user-supplied instance) | TODO | |
 | C3 | X API v2 OAuth 2.0 PKCE | WAITING-ON-HUMAN | Needs `TWITTER_CLIENT_ID`/`SECRET`; implement code path + env contract + UI state now, gate on env |
 | C4 | Instagram + Threads OAuth | WAITING-ON-HUMAN | Needs Meta developer app |

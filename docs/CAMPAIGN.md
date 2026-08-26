@@ -35,6 +35,90 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 2 (Phase C1: live Bluesky connector)
+
+**Summary:** First firing of the recurring campaign trigger (self-bind,
+every 4 hours). Confirmed the branch head matched this session's own prior
+work (no external changes since Session 1) via `git fetch` + `status` +
+`log` before touching anything. Picked Phase C1 — the first live connector
+— since it needs no OAuth developer app, only a user-supplied Bluesky app
+password at connect time.
+
+**What shipped:**
+- `apps/api/src/connectors/bluesky.ts` — a `PlatformConnector` implementation
+  using `@atproto/api`. Stateless by design: every `fetchTimeline`/`publish`
+  call logs in fresh with `AtpAgent` rather than caching a session (session
+  caching + retry/backoff is Phase C5, not this slice). Before writing any
+  code, verified the actual installed package's `.d.ts` files (not memory)
+  for `AtpAgent`'s constructor/login signature, `Agent.getTimeline`/`.post`,
+  and the `FeedViewPost`/`PostView`/image-embed response shapes — confirmed
+  via `npx tsc --noEmit` against the real types with zero errors on the
+  first pass.
+- Self-registers via `registerLiveConnector("bluesky", ...)` (the seam
+  `registry.ts` defines); wired into the running app with one side-effect
+  import (`import "./connectors/bluesky.js"`) in `app.ts` — the pattern each
+  future live connector (C2–C4) will repeat.
+- Images are read from the timeline (`app.bsky.embed.images#view` →
+  `fullsize` URLs) but publish is text-only for now — matches the *existing*
+  demo connectors' behavior (they already discard `mediaUrls` on publish),
+  so this isn't a regression; real media upload is Phase E3.
+- `routes/connections.ts`: the initial-timeline-fetch on connect is now
+  wrapped in try/catch. A rejected live credential (wrong app password, a
+  network error) no longer 500s the connect request — the connection is
+  kept with `status: "error"` and the response carries a `warning` string,
+  so a bad credential is a handled outcome the user can see and retry, not
+  a crash. This closes a real gap the live connector just exposed: before
+  C1, `fetchTimeline` could never throw (demo connectors don't), so this
+  code path was previously unreachable.
+- Tests: `bluesky.test.ts` (6) unit-tests the connector against a **mocked**
+  `AtpAgent` (`vi.hoisted` + `vi.mock("@atproto/api", ...)`) — response
+  mapping, `@`-stripping on login, avatar fallback, missing-credential
+  refusal (asserts the mock constructor is never even called), and publish.
+  `connections.test.ts` (2, new file) exercises the real `POST
+  /api/connections` route end-to-end via `app.inject` with the same mock,
+  covering both the success path (imports posts, no warning) and the
+  rejected-credential path (201 with `warning`, connection status
+  `"error"`, no 500). **No live network call to Bluesky was made anywhere
+  in this session** — every test and every manual check used either the
+  mock or the zero-credential demo path.
+- `.env.example`: documented optional `BLUESKY_SERVICE_URL` override.
+
+**Commands run (all green):**
+- `npm install` (added `@atproto/api@^0.20.41`).
+- `npx tsc --noEmit -p apps/api/tsconfig.json` — clean against the real
+  `@atproto/api` types on the first pass.
+- `npm test -w @nexus/api` — **27/27** vitest tests green across 6 files (8
+  new: 6 in `bluesky.test.ts`, 2 in `connections.test.ts`).
+- `npm run lint && npm test && npm run build` (root) — all green.
+- Manual smoke test against a locally running API: demo login still works;
+  the seeded demo Bluesky connection (no stored credential) still resolves
+  to the **demo** connector for both feed and cross-post — confirmed by the
+  cross-post's `externalId` still being in the demo format
+  (`bluesky-post-<timestamp>`), not an AT-URI — proving a live connector
+  existing in the registry does not change behavior for any connection that
+  has no credentials. DB reset to a clean seed afterward; test-created
+  users cleaned up via each test's own `afterEach`.
+
+**Blockers:** None for shipping the code. `C1a` (real end-to-end validation
+against production `bsky.social`) is parked `WAITING-ON-HUMAN` in
+`docs/BACKLOG.md` — needs a human-supplied Bluesky app password for a test
+account, per the charter's "first human work" list. `C1b` (surface the new
+`warning` field in the web connect UI) is parked as a `C6` follow-up.
+
+**Files touched:** `apps/api/package.json`, `apps/api/package-lock.json`
+(via `npm install`), `apps/api/src/connectors/bluesky.ts` (new),
+`apps/api/src/app.ts`, `apps/api/src/routes/connections.ts`,
+`apps/api/.env.example`, `apps/api/src/__tests__/bluesky.test.ts` (new),
+`apps/api/src/__tests__/connections.test.ts` (new), `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — C1 is DONE
+(code-complete, live-unverified). Take **C2** (Mastodon OAuth 2.0 against a
+user-supplied instance) next, since it also needs no pre-registered
+developer app (NEXUS registers a per-instance OAuth app dynamically). If a
+human has supplied a real Bluesky app password by then, do `C1a` (real
+end-to-end validation) first — it's a quick, high-value confidence check
+before building the next connector on the same pattern.
+
 ### 2026-08-25 — Session 1 addendum: CI fix
 
 PR #4's first CI run (`build-and-test`) failed on `npm run lint`: dozens of
