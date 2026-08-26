@@ -46,6 +46,82 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued a seventh time (Phase D4: media rendering — images)
+
+**Summary:** Checked PR #5's CI on the D2 push before continuing — green
+(`CodeQL`, `build-and-test`, both `Analyze` jobs all `success` this time,
+`mergeable_state: "clean"`, same 5 already-resolved review threads, no new
+ones). Picked **D4** (media rendering, images first) next — independent of
+D1-D3, no datasource dependency the way D6 (search) would have (Phase G1's
+Postgres migration is still `TODO`, so investing in "real" search now would
+be premature).
+
+**What shipped:**
+- **The gap**: the API already carried `FeedPost.mediaUrls` end-to-end —
+  live Bluesky/Mastodon connectors (Phase C) already extract image URLs
+  from real timelines, `/api/feed` already serializes and returns them —
+  but `apps/web/components/PostCard.tsx` never rendered them. A real
+  connected account's photos were silently dropped on the floor.
+- **`MediaGrid`** (new component in `PostCard.tsx`): 1 image keeps its own
+  aspect ratio, capped at a max height; 2 or 4 images render as even
+  squares; 3 renders the familiar one-tall-image-beside-two-stacked layout
+  (via CSS grid `row-span-2`) rather than a naive uniform grid, which looks
+  cramped for a single wide photo and awkward for three. Every image links
+  out to the full-size original in a new tab. Inserted between the post
+  content and the like/repost/reply/bookmark action bar.
+- **Demo data gap this exposed**: `DemoConnector.fetchTimeline` always
+  returned `mediaUrls: []` — meaning the always-must-work, zero-credential
+  demo path would never have shown the new UI at all. Fixed by giving demo
+  posts deterministic sample images: `demo.ts` gained `demoImageFor()`
+  (a colored-gradient SVG, picked from a small deterministic palette) and
+  `demoMediaUrlsFor()` (roughly a third of posts get 1-2 images), using the
+  exact same dependency-free inline-SVG-data-URI technique already
+  established for `avatarFor()` — no external network calls, consistent
+  with this session's demo-data conventions and this sandbox's restricted
+  egress.
+- **Tests**: `connectors.test.ts` gained a test asserting the new demo
+  media generation is deterministic (same seed → same URLs across two
+  calls), that at least some posts have images and some don't, and that
+  every generated URL is a well-formed inline SVG data URI.
+- **Actually looked at it, not just "should render"**: re-seeded the dev
+  DB (existing seeded posts predated the demo-image change) and used a
+  headless-browser screenshot (Playwright + the sandbox's pre-installed
+  Chromium — global install, wired up via `NODE_PATH`/an explicit
+  `executablePath` since it isn't a project dependency) of the actual
+  `/dashboard/feed` page, logged in as `demo@nexus.app`, to visually
+  confirm both single- and two-image posts render with the intended
+  layout, spacing, and rounded corners consistent with the rest of the UI
+  — not just that the build succeeded.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **97/97** across
+  15 files (1 new test, no new file).
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean, all 10 routes still prerender (the feed page's
+  bundle grew slightly, 5.78kB → 6.01kB, from the new `MediaGrid`).
+- Manual smoke test: re-ran `db:setup` to regenerate demo data with the new
+  image logic, started both dev servers, screenshotted the real feed page
+  in a headless browser as described above. Screenshot and the ad hoc
+  Playwright script deleted afterward; both dev servers stopped.
+
+**Blockers:** None. No new env vars. Video rendering is explicitly out of
+scope for this slice, per the backlog item's own "images, then video"
+phrasing — noted as still open in `docs/BACKLOG.md`.
+
+**Files touched:** `apps/api/src/connectors/demo.ts`,
+`apps/api/src/__tests__/connectors.test.ts`,
+`apps/web/components/PostCard.tsx`, `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — D1-D4 are all
+DONE (D4 for images; video remains open). **D6** (non-naive search) is the
+last unstarted Phase D item, but is better sequenced after **G1** (real
+Postgres datasource) given `mode: "insensitive"` and other richer search
+options aren't available on SQLite — worth checking G1's status before
+picking D6 up as-is versus doing a smaller SQLite-compatible improvement
+(e.g. searching `authorName`/`authorHandle` too, not just `content`) in the
+meantime. Otherwise, Phase E (publishing) or Phase F (product surface) are
+reasonable next phases if a human hasn't supplied new Phase C credentials.
+
 ### 2026-08-26 — Session 3 continued a sixth time (Phase D2: stable cursor pagination)
 
 **Summary:** Checked PR #5's CI on the D1/D3 push before continuing — all
