@@ -82,6 +82,12 @@ export const api = {
   disconnect: (id: string) =>
     request<{ ok: boolean }>(`/api/connections/${id}`, { method: "DELETE" }),
 
+  mastodonRegister: (instance: string) =>
+    request<{ authorizeUrl: string }>("/api/connections/mastodon/register", {
+      method: "POST",
+      body: JSON.stringify({ instance }),
+    }),
+
   feed: (params: { cursor?: string; platform?: string; search?: string; bookmarked?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (params.cursor) q.set("cursor", params.cursor);
