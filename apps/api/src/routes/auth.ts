@@ -10,6 +10,7 @@ import {
   REFRESH_COOKIE_NAME,
   REFRESH_COOKIE_PATH,
 } from "../lib/refreshTokens.js";
+import { checkLockout, clearLockout, recordFailedLogin } from "../lib/loginLockout.js";
 
 const registerSchema = z.object({
   email: z.string().email(),
@@ -84,7 +85,11 @@ async function issueSession(
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
-  app.post("/api/auth/register", async (request, reply) => {
+  app.post(
+    "/api/auth/register",
+    // Prevents spamming account creation from a single source.
+    { preHandler: [app.rateLimit({ max: 5, timeWindow: "1 minute" })] },
+    async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0].message });
@@ -103,9 +108,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     const token = await issueSession(user, request, reply);
     return reply.code(201).send({ token, user: publicUser(user) });
-  });
+    },
+  );
 
-  app.post("/api/auth/login", async (request, reply) => {
+  app.post(
+    "/api/auth/login",
+    // Rate-limited per IP to slow a single-source brute force; the account
+    // lockout below (per-user, not per-IP) is what actually bounds total
+    // guesses against one account regardless of how many IPs an attacker
+    // spreads across.
+    { preHandler: [app.rateLimit({ max: 10, timeWindow: "1 minute" })] },
+    async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "Invalid email or password" });
@@ -113,17 +126,38 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const { email, password } = parsed.data;
 
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    if (!user) {
       return reply.code(401).send({ error: "Invalid email or password" });
     }
 
+    const lockout = checkLockout(user);
+    if (lockout.locked) {
+      return reply.code(423).send({
+        error: "Too many failed login attempts. Please try again later.",
+        retryAfterSeconds: lockout.retryAfterSeconds,
+      });
+    }
+
+    if (!(await bcrypt.compare(password, user.passwordHash))) {
+      await recordFailedLogin(user.id);
+      return reply.code(401).send({ error: "Invalid email or password" });
+    }
+
+    await clearLockout(user.id);
     const token = await issueSession(user, request, reply);
     return reply.send({ token, user: publicUser(user) });
-  });
+    },
+  );
 
   // Silently exchanges the httpOnly refresh cookie for a new access token,
   // rotating the refresh token in the process (see lib/refreshTokens.ts).
-  app.post("/api/auth/refresh", async (request, reply) => {
+  app.post(
+    "/api/auth/refresh",
+    // Generous relative to register/login: legitimate use fires this on
+    // every 401 across possibly several open tabs, so it needs headroom
+    // beyond a login-brute-force budget while still bounding abuse.
+    { preHandler: [app.rateLimit({ max: 20, timeWindow: "1 minute" })] },
+    async (request, reply) => {
     const rawToken = request.cookies[REFRESH_COOKIE_NAME];
     if (!rawToken) return reply.code(401).send({ error: "No refresh token" });
 
@@ -148,7 +182,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const accessToken = await reply.jwtSign({ sub: user.id, email: user.email }, { expiresIn: ACCESS_TOKEN_TTL });
     reply.setCookie(REFRESH_COOKIE_NAME, outcome.issued.rawToken, refreshCookieOptions());
     return reply.send({ token: accessToken, user: publicUser(user) });
-  });
+    },
+  );
 
   // Not behind app.authenticate on purpose: a user with an already-expired
   // access token must still be able to end their session. It only ever
