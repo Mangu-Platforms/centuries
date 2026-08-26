@@ -32,7 +32,40 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+// Access tokens are short-lived (15 minutes, see routes/auth.ts). The
+// long-lived credential is an httpOnly refresh cookie the browser sends
+// automatically (hence `credentials: "include"` below) — this module
+// never reads or stores it directly. On a 401, silently exchange it for a
+// fresh access token and retry the request once, so an expired token
+// never surfaces as a logout the user notices. Login's own 401 (wrong
+// password) must never trigger this — it isn't a session expiring.
+const AUTH_RETRY_EXEMPT_PATHS = new Set(["/api/auth/login"]);
+
+let refreshPromise: Promise<boolean> | null = null;
+
+// Concurrent 401s (e.g. several components fetching on mount) must share
+// one in-flight refresh rather than each firing their own: the refresh
+// token rotates on use, so two independent refresh calls with the same
+// stale cookie would have the second one look like a replay of an
+// already-used token and revoke the user's own session.
+function tryRefresh(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = fetch(`${API_URL}/api/auth/refresh`, { method: "POST", credentials: "include" })
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const body = await res.json();
+        setToken(body.token);
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+async function request<T>(path: string, options: RequestInit = {}, isRetry = false): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -40,7 +73,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${API_URL}${path}`, { ...options, headers, credentials: "include" });
+
+  if (res.status === 401 && !isRetry && !AUTH_RETRY_EXEMPT_PATHS.has(path)) {
+    const refreshed = await tryRefresh();
+    if (refreshed) return request<T>(path, options, true);
+    clearToken();
+  }
+
   const isJson = res.headers.get("content-type")?.includes("application/json");
   const body = isJson ? await res.json() : null;
 
@@ -65,6 +105,8 @@ export const api = {
     }),
 
   me: () => request<{ user: User }>("/api/auth/me"),
+
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 
   updateProfile: (data: Partial<Pick<User, "displayName" | "bio" | "theme">>) =>
     request<{ user: User }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(data) }),
