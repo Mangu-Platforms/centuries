@@ -4,6 +4,7 @@ import { prisma } from "../db.js";
 import { PLATFORMS, isPlatform } from "../config.js";
 import { getConnector } from "../connectors/registry.js";
 import { decryptSecret, encryptSecret } from "../lib/crypto.js";
+import { importInitialTimeline } from "../lib/timelineImport.js";
 
 const connectSchema = z.object({
   platform: z.string().refine(isPlatform, "Unsupported platform"),
@@ -95,52 +96,24 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     const hasCredentials = Boolean(connection.appPasswordEnc || connection.accessTokenEnc);
     const connector = getConnector(platform, hasCredentials);
 
-    let remote: Awaited<ReturnType<typeof connector.fetchTimeline>> = [];
-    let fetchError = "";
-    try {
-      remote = await connector.fetchTimeline(
-        {
-          handle,
-          instance,
-          appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
-          accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
-        },
-        8,
-      );
-    } catch (err) {
-      // A live connector can reject a bad credential (wrong app password,
-      // network error, etc). Keep the connection so the user can see it
-      // failed and retry/reconnect (Phase C6), rather than 500ing the whole
-      // request — one bad credential must never crash the connect flow.
-      fetchError = err instanceof Error ? err.message : "Failed to fetch initial timeline";
-      await prisma.connection.update({ where: { id: connection.id }, data: { status: "error" } });
-      connection.status = "error";
-    }
-
-    if (remote.length > 0) {
-      await prisma.feedPost.createMany({
-        data: remote.map((p) => ({
-          userId: request.user.sub,
-          connectionId: connection.id,
-          platform,
-          externalId: p.externalId,
-          authorHandle: p.authorHandle,
-          authorName: p.authorName,
-          authorAvatar: p.authorAvatar,
-          content: p.content,
-          mediaUrls: JSON.stringify(p.mediaUrls),
-          likeCount: p.likeCount,
-          repostCount: p.repostCount,
-          replyCount: p.replyCount,
-          postedAt: p.postedAt,
-        })),
-      });
-    }
+    const { importedPosts, warning } = await importInitialTimeline({
+      userId: request.user.sub,
+      connectionId: connection.id,
+      platform,
+      connector,
+      ctx: {
+        handle,
+        instance,
+        appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
+        accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+      },
+    });
+    if (warning) connection.status = "error";
 
     return reply.code(201).send({
       connection: publicConnection(connection),
-      importedPosts: remote.length,
-      ...(fetchError ? { warning: `Connected, but could not fetch the initial timeline: ${fetchError}` } : {}),
+      importedPosts,
+      ...(warning ? { warning } : {}),
     });
   });
 

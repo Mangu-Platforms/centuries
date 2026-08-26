@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { api, clearToken, getToken, setToken } from "./api";
+import { api, clearToken, setToken } from "./api";
 import type { User } from "./types";
 
 interface AuthContextValue {
@@ -18,7 +18,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   refresh: () => Promise<void>;
   setUser: (user: User) => void;
 }
@@ -31,11 +31,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   const refresh = useCallback(async () => {
-    if (!getToken()) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
+    // Always attempt /api/auth/me, even with no local access token: the
+    // request layer (lib/api.ts) transparently retries a 401 via the
+    // httpOnly refresh cookie, so a session started in another tab (or
+    // one that outlived its 15-minute access token while this tab was
+    // closed) gets silently restored here rather than forcing a fresh
+    // login.
     try {
       const { user } = await api.me();
       setUser(user);
@@ -68,7 +69,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(user);
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await api.logout();
+    } catch {
+      // Best-effort — the refresh cookie may already be gone or expired;
+      // local state must still be cleared either way.
+    }
     clearToken();
     setUser(null);
     router.push("/login");

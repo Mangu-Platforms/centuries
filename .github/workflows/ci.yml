@@ -42,3 +42,46 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  e2e:
+    # Golden-path smoke test (Phase F6), driven against real dev servers +
+    # the demo connector stack — no third-party credentials needed. Gated
+    # on build-and-test so a browser install + full e2e run only happens
+    # once the fast checks (lint/unit tests/build) already passed.
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "file:./dev.db"
+      JWT_SECRET: "ci-test-secret-not-for-production"
+      DATA_KEY: "7d9b4aee49674a85bdc571a68abc76ebe407606be2363f8cb1a481758f5bb8d9"
+      CORS_ORIGIN: "http://localhost:3000"
+      NEXT_PUBLIC_API_URL: "http://localhost:4000"
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up dev database
+        run: npm run db:setup -w @nexus/api
+
+      - name: Install Playwright's Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run smoke test
+        run: npm run test:e2e -w @nexus/web
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 7

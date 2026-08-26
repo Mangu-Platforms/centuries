@@ -5,6 +5,7 @@ import type {
   Platform,
   PublishHistoryItem,
   PublishTargetResult,
+  SessionInfo,
   User,
 } from "./types";
 
@@ -32,7 +33,40 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+// Access tokens are short-lived (15 minutes, see routes/auth.ts). The
+// long-lived credential is an httpOnly refresh cookie the browser sends
+// automatically (hence `credentials: "include"` below) — this module
+// never reads or stores it directly. On a 401, silently exchange it for a
+// fresh access token and retry the request once, so an expired token
+// never surfaces as a logout the user notices. Login's own 401 (wrong
+// password) must never trigger this — it isn't a session expiring.
+const AUTH_RETRY_EXEMPT_PATHS = new Set(["/api/auth/login"]);
+
+let refreshPromise: Promise<boolean> | null = null;
+
+// Concurrent 401s (e.g. several components fetching on mount) must share
+// one in-flight refresh rather than each firing their own: the refresh
+// token rotates on use, so two independent refresh calls with the same
+// stale cookie would have the second one look like a replay of an
+// already-used token and revoke the user's own session.
+function tryRefresh(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = fetch(`${API_URL}/api/auth/refresh`, { method: "POST", credentials: "include" })
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const body = await res.json();
+        setToken(body.token);
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+async function request<T>(path: string, options: RequestInit = {}, isRetry = false): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -40,7 +74,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${API_URL}${path}`, { ...options, headers, credentials: "include" });
+
+  if (res.status === 401 && !isRetry && !AUTH_RETRY_EXEMPT_PATHS.has(path)) {
+    const refreshed = await tryRefresh();
+    if (refreshed) return request<T>(path, options, true);
+    clearToken();
+  }
+
   const isJson = res.headers.get("content-type")?.includes("application/json");
   const body = isJson ? await res.json() : null;
 
@@ -66,6 +107,36 @@ export const api = {
 
   me: () => request<{ user: User }>("/api/auth/me"),
 
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+
+  requestPasswordReset: (email: string) =>
+    request<{ ok: boolean }>("/api/auth/password-reset/request", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  confirmPasswordReset: (token: string, newPassword: string) =>
+    request<{ ok: boolean }>("/api/auth/password-reset/confirm", {
+      method: "POST",
+      body: JSON.stringify({ token, newPassword }),
+    }),
+
+  requestEmailVerification: () =>
+    request<{ ok: boolean; alreadyVerified?: boolean }>("/api/auth/email/verify/request", { method: "POST" }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+  sessions: () => request<{ sessions: SessionInfo[] }>("/api/auth/sessions"),
+
+  revokeSession: (id: string) => request<{ ok: boolean }>(`/api/auth/sessions/${id}`, { method: "DELETE" }),
+
+  logoutAllOtherSessions: () =>
+    request<{ ok: boolean; revoked: number }>("/api/auth/sessions/logout-all", { method: "POST" }),
+
   updateProfile: (data: Partial<Pick<User, "displayName" | "bio" | "theme">>) =>
     request<{ user: User }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(data) }),
 
@@ -82,6 +153,12 @@ export const api = {
   disconnect: (id: string) =>
     request<{ ok: boolean }>(`/api/connections/${id}`, { method: "DELETE" }),
 
+  mastodonRegister: (instance: string) =>
+    request<{ authorizeUrl: string }>("/api/connections/mastodon/register", {
+      method: "POST",
+      body: JSON.stringify({ instance }),
+    }),
+
   feed: (params: { cursor?: string; platform?: string; search?: string; bookmarked?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (params.cursor) q.set("cursor", params.cursor);
@@ -97,10 +174,10 @@ export const api = {
   bookmark: (id: string) =>
     request<{ post: FeedPost }>(`/api/feed/${id}/bookmark`, { method: "POST" }),
 
-  publish: (content: string, platforms: string[], mediaUrls: string[] = []) =>
+  publish: (content: string, platforms: string[], mediaUrls: string[] = [], idempotencyKey?: string) =>
     request<{ jobId: string; results: PublishTargetResult[] }>("/api/posts", {
       method: "POST",
-      body: JSON.stringify({ content, platforms, mediaUrls }),
+      body: JSON.stringify({ content, platforms, mediaUrls, idempotencyKey }),
     }),
 
   history: () => request<{ jobs: PublishHistoryItem[] }>("/api/posts/history"),

@@ -7,6 +7,7 @@ export interface User {
   bio: string;
   avatarUrl: string;
   theme: "light" | "dark";
+  emailVerifiedAt: string | null;
 }
 
 export interface Platform {
@@ -15,6 +16,14 @@ export interface Platform {
   charLimit: number;
   color: string;
   auth: string;
+}
+
+export interface SessionInfo {
+  id: string;
+  userAgent: string;
+  ipAddress: string;
+  createdAt: string;
+  current: boolean;
 }
 
 export interface Connection {

@@ -48,7 +48,15 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
 
     const posts = await prisma.feedPost.findMany({
       where,
-      orderBy: { postedAt: "desc" },
+      // Phase D2: postedAt alone isn't unique — two posts (demo data, or a
+      // burst of real activity) can share the same value, and Prisma's
+      // cursor pagination only anchors on the id/skip:1 pair, not the sort
+      // key. Without a deterministic tiebreaker, rows tied on postedAt can
+      // be ordered differently between the initial query and a follow-up
+      // cursor query, silently skipping or repeating a row across pages.
+      // Sorting by id too (also desc, matching creation order for ties)
+      // makes the full ordering deterministic regardless of duplicates.
+      orderBy: [{ postedAt: "desc" }, { id: "desc" }],
       take: limit + 1,
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
     });

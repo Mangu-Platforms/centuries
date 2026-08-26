@@ -1,11 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import type { Connection, PlatformId } from "@/lib/types";
 import { PLATFORM_META, PLATFORM_ORDER, PlatformGlyph } from "@/lib/platforms";
 
 export default function ConnectionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ConnectionsPageInner />
+    </Suspense>
+  );
+}
+
+function ConnectionsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [platform, setPlatform] = useState<PlatformId>("twitter");
   const [handle, setHandle] = useState("");
@@ -20,10 +31,44 @@ export default function ConnectionsPage() {
     load();
   }, []);
 
+  // Returning from the Mastodon OAuth redirect (routes/mastodonAuth.ts sends
+  // the browser back here with these query params) — surface the result
+  // once, then strip them from the URL so a refresh doesn't re-show it.
+  useEffect(() => {
+    const connected = searchParams.get("mastodonConnected");
+    const imported = searchParams.get("imported");
+    const mastodonError = searchParams.get("mastodonError");
+    if (connected) {
+      setMessage(`Connected Mastodon! Imported ${imported ?? 0} posts.`);
+      setError(null);
+      load();
+      router.replace("/dashboard/connections");
+    } else if (mastodonError) {
+      setError(mastodonError);
+      setMessage(null);
+      router.replace("/dashboard/connections");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const connect = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setMessage(null);
+
+    if (platform === "mastodon") {
+      if (!instance.trim()) return setError("Enter your Mastodon instance (e.g. mastodon.social).");
+      setBusy(true);
+      try {
+        const { authorizeUrl } = await api.mastodonRegister(instance.trim());
+        window.location.href = authorizeUrl;
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Failed to start Mastodon authorization");
+        setBusy(false);
+      }
+      return;
+    }
+
     if (!handle.trim()) return setError("Enter your handle.");
     setBusy(true);
     try {
@@ -93,23 +138,27 @@ export default function ConnectionsPage() {
         </div>
 
         <form onSubmit={connect} className="space-y-4">
-          <div>
-            <label className="label">{platform === "bluesky" ? "Handle (e.g. you.bsky.social)" : "Handle"}</label>
-            <input
-              className="input"
-              value={handle}
-              onChange={(e) => setHandle(e.target.value)}
-              placeholder={platform === "mastodon" ? "@you@mastodon.social" : "@you"}
-            />
-          </div>
-          {platform === "mastodon" && (
+          {platform === "mastodon" ? (
             <div>
-              <label className="label">Instance (optional)</label>
+              <label className="label">Your Mastodon instance</label>
               <input
                 className="input"
                 value={instance}
                 onChange={(e) => setInstance(e.target.value)}
                 placeholder="mastodon.social"
+              />
+              <p className="mt-1.5 text-xs text-slate-500">
+                You&apos;ll be sent to your instance to sign in and approve NEXUS — no account handle needed here.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="label">{platform === "bluesky" ? "Handle (e.g. you.bsky.social)" : "Handle"}</label>
+              <input
+                className="input"
+                value={handle}
+                onChange={(e) => setHandle(e.target.value)}
+                placeholder="@you"
               />
             </div>
           )}
@@ -146,7 +195,13 @@ export default function ConnectionsPage() {
           )}
 
           <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? "Connecting…" : `Connect ${meta.name}`}
+            {busy
+              ? platform === "mastodon"
+                ? "Redirecting…"
+                : "Connecting…"
+              : platform === "mastodon"
+                ? "Continue to your instance"
+                : `Connect ${meta.name}`}
           </button>
         </form>
       </section>

@@ -1,19 +1,26 @@
 import crypto from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { config, PLATFORMS } from "./config.js";
 import { prisma } from "./db.js";
 import { registerAuth } from "./plugins/auth.js";
 import { authRoutes } from "./routes/auth.js";
+import { accountRecoveryRoutes } from "./routes/accountRecovery.js";
+import { sessionRoutes } from "./routes/sessions.js";
 import { connectionRoutes } from "./routes/connections.js";
+import { mastodonAuthRoutes } from "./routes/mastodonAuth.js";
 import { feedRoutes } from "./routes/feed.js";
 import { postRoutes } from "./routes/posts.js";
+import { internalRoutes } from "./routes/internal.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
-// Side-effect import: registers the live Bluesky connector with the
-// connector registry (see connectors/registry.ts). Each live connector as
-// it's implemented (Phase C) gets one line like this — this is the single
-// place that wires "live connectors exist" into a running app.
+// Side-effect imports: register each live connector with the connector
+// registry (see connectors/registry.ts). Each live connector as it's
+// implemented (Phase C) gets one line like this — this is the single place
+// that wires "live connectors exist" into a running app.
 import "./connectors/bluesky.js";
+import "./connectors/mastodon.js";
 
 /** Structured API error shape returned by the global error/not-found handlers. */
 interface ApiErrorBody {
@@ -36,6 +43,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
+  // No `secret` option: the refresh token cookie's value is itself a
+  // high-entropy opaque random token (see lib/refreshTokens.ts), so it
+  // doesn't need an additional signature — unlike a cookie that stored
+  // readable/guessable data.
+  await app.register(cookie);
+  // global: false — this doesn't rate-limit every route by default, it only
+  // makes the `app.rateLimit(...)` preHandler decorator available for
+  // routes that opt in explicitly (see routes/mastodonAuth.ts). Blanket
+  // rate limiting across every route is Phase B3's job.
+  await app.register(rateLimit, { global: false });
   await registerAuth(app);
 
   // Uncaught errors (thrown exceptions, Fastify schema/body-parsing
@@ -78,9 +95,13 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.get("/api/platforms", async () => ({ platforms: Object.values(PLATFORMS) }));
 
   await app.register(authRoutes);
+  await app.register(accountRecoveryRoutes);
+  await app.register(sessionRoutes);
   await app.register(connectionRoutes);
+  await app.register(mastodonAuthRoutes);
   await app.register(feedRoutes);
   await app.register(postRoutes);
+  await app.register(internalRoutes);
   await app.register(dashboardRoutes);
 
   return app;

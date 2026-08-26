@@ -24,6 +24,19 @@ describe("demo connectors", () => {
     expect(sorted[0].postedAt.getTime()).toBeGreaterThanOrEqual(sorted[4].postedAt.getTime());
   });
 
+  it("gives some posts demo images (Phase D4), deterministically", async () => {
+    const a = await getConnector("bluesky").fetchTimeline({ handle: "@birdman" }, 12);
+    const b = await getConnector("bluesky").fetchTimeline({ handle: "@birdman" }, 12);
+    expect(a.map((p) => p.mediaUrls)).toEqual(b.map((p) => p.mediaUrls));
+    expect(a.some((p) => p.mediaUrls.length > 0)).toBe(true);
+    expect(a.some((p) => p.mediaUrls.length === 0)).toBe(true);
+    for (const post of a) {
+      for (const url of post.mediaUrls) {
+        expect(url).toMatch(/^data:image\/svg\+xml;utf8,/);
+      }
+    }
+  });
+
   it("publishes and returns an external id", async () => {
     const res = await getConnector("mastodon").publish({ handle: "@a@b.social" }, "hello world", []);
     expect(res.externalId).toContain("mastodon-post-");

@@ -73,6 +73,33 @@ function avatarFor(seed: string, color: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+// A few muted gradient pairs so demo "photos" (Phase D4) don't all look
+// identical — picked per-post from a deterministic seed, same as everything
+// else in this connector. Self-contained SVG data URIs, not real network
+// images: this sandbox's outbound network is restricted, and hotlinking
+// external images in demo data would be fragile in production too.
+const MEDIA_GRADIENTS: Array<[string, string]> = [
+  ["#f97316", "#ec4899"],
+  ["#6366f1", "#06b6d4"],
+  ["#22c55e", "#14b8a6"],
+  ["#a855f7", "#3b82f6"],
+  ["#f59e0b", "#ef4444"],
+];
+
+function demoImageFor(seed: number): string {
+  const [from, to] = MEDIA_GRADIENTS[seed % MEDIA_GRADIENTS.length];
+  const gradientId = `g${seed % MEDIA_GRADIENTS.length}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320"><defs><linearGradient id="${gradientId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${from}"/><stop offset="100%" stop-color="${to}"/></linearGradient></defs><rect width="480" height="320" fill="url(#${gradientId})"/></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+/** Deterministically gives roughly a third of posts 1-2 demo images, so the media-rendering UI (Phase D4) has something to show without any live connector. */
+function demoMediaUrlsFor(seed: number): string[] {
+  if (seed % 3 !== 0) return [];
+  const count = (seed % 2) + 1;
+  return Array.from({ length: count }, (_, i) => demoImageFor(seed + i));
+}
+
 class DemoConnector implements PlatformConnector {
   constructor(public readonly platform: PlatformId) {}
 
@@ -94,7 +121,7 @@ class DemoConnector implements PlatformConnector {
         authorName: author.name,
         authorAvatar: avatarFor(author.name, color),
         content: text,
-        mediaUrls: [],
+        mediaUrls: demoMediaUrlsFor(base + i),
         likeCount: ((base + i * 13) % 950) + 5,
         repostCount: ((base + i * 5) % 220) + 1,
         replyCount: ((base + i * 3) % 90) + 0,
