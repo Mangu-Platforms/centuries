@@ -46,6 +46,126 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 3 continued again (Phase B2: password reset + email verification)
+
+**Summary:** Same session as B1/B3 above, continued straight through per the
+B3 entry's own "next step" note. Picked B2 — the only remaining Phase B item
+that needs no external credentials to ship, since the charter calls for a
+provider interface with a console transport in dev rather than a real email
+service.
+
+**What shipped:**
+- **`apps/api/src/lib/email.ts`** (new) — `EmailProvider` interface,
+  `ConsoleEmailProvider` (the only implementation today: logs the message to
+  server output). `sendEmail()` is the call-site API; `setEmailProvider()`
+  is the swap seam both tests and a future real provider use. No real
+  provider credentials exist yet (no SMTP/Resend/etc.), so this gets the
+  same "ship the code path, gate the real thing" treatment as the X/
+  Instagram connectors in Phase C — parked as `B2a`.
+- **`apps/api/src/lib/verificationTokens.ts`** (new) — hashed, single-use,
+  purpose-checked tokens, the same hashing rationale as `refreshTokens.ts`
+  (high-entropy random value, not a user secret, so SHA-256 not bcrypt).
+  One `VerificationToken` Prisma model backs both flows rather than two
+  near-identical ones; `purpose` (`"password_reset"` | `"email_verify"`) is
+  checked on every consume, so a reset token can't be replayed against the
+  verify endpoint even though the hash alone is already globally unique —
+  verified by a dedicated test.
+- **`apps/api/src/routes/accountRecovery.ts`** (new), registered in
+  `app.ts`:
+  - `POST /api/auth/password-reset/request` — always responds `200 {ok:
+    true}` whether or not the email is registered (no enumeration); only
+    sends an email when it is. 30-minute token TTL.
+  - `POST /api/auth/password-reset/confirm` — consumes the token, updates
+    `passwordHash` (bcrypt cost 12, same as register), and — the one design
+    decision worth calling out — calls `revokeAllForUser()` (from B1) and
+    `clearLockout()` (from B3) on success. A password reset has to
+    invalidate every existing session (a stolen refresh token from before
+    the reset must stop working) and clear any lockout (the credential that
+    caused it no longer exists), so this slice directly reuses both of the
+    last two sessions' work rather than duplicating either.
+  - `POST /api/auth/email/verify/request` — authenticated; a no-op
+    (`{ok:true, alreadyVerified:true}`, sends nothing) if already verified,
+    so spamming "resend" can't spam the inbox. 24-hour token TTL.
+  - `GET /api/auth/email/verify` — deliberately unauthenticated, same
+    reasoning as the Mastodon OAuth callback (`routes/mastodonAuth.ts`): a
+    link clicked from an email can't carry a Bearer header, so the token in
+    the query string is the only credential this route trusts. Redirects to
+    `/dashboard/settings` with `emailVerified=1` or `emailVerifyError=...`.
+  - All four routes rate-limited per IP via the same `app.rateLimit()`
+    preHandler pattern established in B3.
+  - `publicUser()` (in `routes/auth.ts`) now includes `emailVerifiedAt`, so
+    every auth response (register/login/refresh/me) carries verification
+    status without an extra round trip.
+- **Web:** `lib/api.ts` gained `requestPasswordReset`, `confirmPasswordReset`,
+  `requestEmailVerification`; `lib/types.ts`'s `User` gained
+  `emailVerifiedAt`. New `/forgot-password` (email → "check your inbox",
+  worded to match the backend's non-enumerating response) and
+  `/reset-password` (reads `?token=` via `useSearchParams`, wrapped in
+  `<Suspense>` per the same Next 14 static-prerendering requirement C2 hit)
+  pages. `/login` gained a "Forgot password?" link and (also now behind
+  `<Suspense>`, since it reads `?reset=1`) a post-reset success banner.
+  `/dashboard/settings` gained an "Email verification" row — status badge,
+  a "Resend email" button when unverified, and handling for the
+  `?emailVerified=1` / `?emailVerifyError=...` redirect params from the
+  verify-link callback (calls the existing `refresh()` from B1's
+  `auth.tsx` so the badge updates immediately without a manual reload).
+- **Tests:** `apps/api/src/__tests__/accountRecovery.test.ts` (new, 11
+  tests) — password reset: happy path end-to-end (old password stops
+  working, new one works), non-enumeration (unregistered email still 200,
+  sends nothing), invalid token, reuse-of-consumed-token, session +
+  lockout state actually clears on success, rate-limit trip. Email
+  verification: happy path end-to-end (register → request → click link →
+  `/me` reflects it), already-verified no-op sends nothing, requires auth
+  to request, invalid/missing token redirects cleanly (not a 500), and the
+  cross-purpose-replay rejection mentioned above.
+
+**Commands run (all green):**
+- `apps/api`: `npx tsc --noEmit` clean. `npx vitest run` — **73/73** across
+  11 files (11 new).
+- Root: `npm run lint` (API typecheck + `next lint`) clean. `npm run build`
+  — API clean; web clean, all 10 routes now prerender (2 new:
+  `/forgot-password`, `/reset-password`).
+- Manual smoke test against a locally running API: confirmed
+  `demo@nexus.app`/`password123` still logs in normally; registered a
+  throwaway account, requested a password reset, read the actual reset
+  link out of the console-transport log output (not mocked — the real
+  `ConsoleEmailProvider` path), confirmed the old password stopped working
+  and the new one logged in after confirming the reset; requested email
+  verification with that new session's access token, read the verify link
+  out of the log the same way, confirmed the `GET` redirected to
+  `/dashboard/settings?emailVerified=1` and `/api/auth/me` now reflects a
+  non-null `emailVerifiedAt`. Deleted the throwaway account and stopped the
+  dev server afterward — no data left behind.
+
+**Blockers:** None for shipping the code. `B2a` (wire a real email
+provider) is parked `WAITING-ON-HUMAN` in `docs/BACKLOG.md` — genuinely low
+effort once credentials exist (one new `EmailProvider` implementation, no
+route changes). No new required env vars — `.env.example` documents this
+with a comment rather than a var, since there's nothing to set until a real
+provider is chosen.
+
+**Files touched:** `apps/api/prisma/schema.prisma`, `apps/api/src/lib/email.ts`
+(new), `apps/api/src/lib/verificationTokens.ts` (new),
+`apps/api/src/routes/accountRecovery.ts` (new), `apps/api/src/routes/auth.ts`,
+`apps/api/src/app.ts`, `apps/api/.env.example`,
+`apps/api/src/__tests__/accountRecovery.test.ts` (new), `apps/web/lib/api.ts`,
+`apps/web/lib/types.ts`, `apps/web/app/login/page.tsx`,
+`apps/web/app/forgot-password/page.tsx` (new),
+`apps/web/app/reset-password/page.tsx` (new),
+`apps/web/app/dashboard/settings/page.tsx`, `docs/BACKLOG.md`.
+
+**Next step for the next session:** Read `docs/BACKLOG.md` — B1, B2, and B3
+are all DONE; Phase B has one item left, **B4** (session list / logout-all),
+now fully unblocked (B1 shipped `revokeAllForUser()` and per-token
+`userAgent`/`ipAddress`, B3 added the lockout/session-security context a
+settings page would sit next to). After B4, Phase B is complete and C3/C4
+(X, Instagram/Threads) are the only remaining `WAITING-ON-HUMAN` items
+before Phase D (feed quality) becomes the natural next phase — check
+`docs/BACKLOG.md`'s Parked section for whether a human has supplied any of
+the outstanding credentials (Twitter/Meta developer apps, Bluesky app
+password, or an email provider for B2a) before starting Phase D from
+scratch.
+
 ### 2026-08-26 — Session 3 continued (Phase B3: rate limiting + account lockout)
 
 **Summary:** Same session as B1 above, continued straight through per the

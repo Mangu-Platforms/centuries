@@ -36,7 +36,7 @@ multiple items at once.
 | ID | Item | Status | Notes |
 | --- | --- | --- | --- |
 | B1 | Refresh tokens | DONE (2026-08-26) | Access tokens now 15m JWTs (was 7d). New `RefreshToken` table (hashed, rotating, reuse-detection) backs a `nexus_refresh` httpOnly cookie scoped to `/api/auth` (`SameSite=None; Secure` in prod for the cross-origin Vercel/Railway split, `Lax` in dev). `POST /api/auth/refresh` rotates the cookie + mints a new access token; reuse of an already-rotated token revokes *all* of that user's sessions, not just the reused one. `POST /api/auth/logout` revokes the presented token. Web: `lib/api.ts`'s `request()` now sends `credentials: "include"` and silently retries a single 401 through `tryRefresh()` (a shared in-flight promise, so concurrent 401s across components don't race two refreshes against the same rotating cookie); `lib/auth.tsx`'s `refresh()` always calls `api.me()` on mount (no more "skip if no local token" guard), so a session survives a fresh tab / reload with no access token in memory as long as the refresh cookie is valid; `logout()` is now async and calls `api.logout()` before clearing local state. 10 new API tests (`refreshTokens.test.ts`) cover cookie flags/TTL, rotation, reuse-detection (incl. revoking a second, independent session), expiry, and logout. No new env vars — cookie `secure`/`sameSite` derive from existing `config.isProd`. |
-| B2 | Password reset + email verification | TODO | Provider interface, console transport in dev |
+| B2 | Password reset + email verification | DONE (2026-08-26) | `src/lib/email.ts` — `EmailProvider` interface, `ConsoleEmailProvider` default (no real provider credentials exist yet, same "ship the code path, gate the real provider" treatment as C3/C4). `src/lib/verificationTokens.ts` — hashed, single-use, purpose-checked tokens (`password_reset` 30min TTL, `email_verify` 24h TTL), same hashing approach as `refreshTokens.ts`. New `apps/api/src/routes/accountRecovery.ts`: `POST /api/auth/password-reset/request` (non-enumerating — always 200), `POST /api/auth/password-reset/confirm` (also revokes all refresh tokens + clears lockout), `POST /api/auth/email/verify/request` (authenticated), `GET /api/auth/email/verify` (unauthenticated link-click callback, same pattern as the Mastodon OAuth callback). All four rate-limited per IP. Web: `/forgot-password` and `/reset-password` pages (new), "Forgot password?" link on `/login`, an "Email verification" status + resend button on `/dashboard/settings`. 11 new API tests (`accountRecovery.test.ts`). |
 | B3 | Rate-limit auth routes + lockout | DONE (2026-08-26) | `POST /api/auth/register` (5/min), `/login` (10/min), `/refresh` (20/min) rate-limited per IP via `@fastify/rate-limit`, same `app.rateLimit()` preHandler pattern as the Mastodon OAuth routes. Separately, per-account lockout (`src/lib/loginLockout.ts`): `User.failedLoginAttempts`/`lockedUntil` fields; 5 consecutive failed logins locks the account for 15 minutes (`423` with `retryAfterSeconds`, checked *before* the password comparison so a correct password doesn't bypass it); a successful login before the threshold resets the counter. Rate limiting alone doesn't stop a distributed brute force (many IPs, one account) — the per-account lockout is what actually bounds that. 6 new tests in `auth.test.ts`. |
 | B4 | Session list / logout-all | TODO | Unblocked now that B1 is done — `RefreshToken` already has `userAgent`/`ipAddress` per row for a session-list UI; "logout all" is `revokeAllForUser()` in `lib/refreshTokens.ts`, already written and used by the reuse-detection path, just needs a route |
 | B5 | Settings: change password, display name, theme | TODO | Theme field exists; wire UI |
@@ -98,6 +98,13 @@ multiple items at once.
 
 ## Parked / WAITING-ON-HUMAN
 
+- **B2a (wire a real email provider)** — password reset and email
+  verification are fully code-complete and tested against the
+  `EmailProvider` interface, but the only implementation today is
+  `ConsoleEmailProvider` (logs to server output) — there's no real
+  transactional email provider account (Resend, Postmark, SMTP, etc.) yet.
+  Low effort once credentials exist: implement one more `EmailProvider`,
+  swap it in based on an env var, done — no route changes needed.
 - **C1a (Bluesky live validation)** — code-complete, unit-tested against real
   SDK types, never run against a live account. Needs a Bluesky app password
   for a test account.
