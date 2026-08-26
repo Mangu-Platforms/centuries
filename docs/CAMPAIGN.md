@@ -46,6 +46,42 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-26 — Session 2, addendum 2: CodeQL findings on PR #5, fixed
+
+CodeQL ran on PR #5's push and flagged 3 high-severity findings, all in new
+C2 code — verified each, fixed, tested, replied on the review threads, and
+resolved them:
+
+1. **Double-unescaping / incomplete sanitization** (`connectors/mastodon.ts`,
+   `stripHtml()`): entities were decoded *after* tags were stripped, so a
+   toot literally containing escaped `<script>` text (Mastodon
+   entity-escapes any literal `<`/`>` a user types) would survive the
+   tag-strip pass, then get unescaped back into literal, unstripped
+   `<script>` text in `RemotePost.content`. Not currently exploitable (the
+   web UI renders `content` as React text, which always escapes), but a
+   real defect and a footgun for any future consumer. Fixed by decoding
+   first, then stripping — the function's output can no longer contain a
+   literal `<`/`>` at all. Regression test added with the exact payload.
+2. **Missing rate limiting** (`routes/mastodonAuth.ts`, both handlers):
+   neither the register nor callback endpoint had any rate limiting.
+   Verified true — no rate limiting exists anywhere in the codebase yet
+   (Phase B3 is the tracked item for auth-routes-wide limiting). Added
+   `@fastify/rate-limit` scoped narrowly to just these two new routes
+   (`global: false`, so nothing else is affected) rather than widening into
+   B3's territory: register at 5/min (before the auth check, since it
+   triggers a real outbound call regardless of token validity), callback at
+   10/min (its only guard, since it's deliberately unauthenticated).
+   Regression tests confirm the limit actually trips.
+
+Commands: `npm test` 46/46, `npm run lint`, `npm run build` all green after
+the fixes. Pushed as `6f8779e` (sanitization) and `296ad1e` (rate limit).
+Replied on all three CodeQL review threads referencing the fix commits and
+resolved them.
+
+**Next step:** same as before — Phase B (auth hardening) is next. Watch
+PR #5 for CI going green on `296ad1e` and for any further review activity
+before considering this slice fully closed out.
+
 ### 2026-08-26 — Session 2, addendum: PR #4 merged mid-flight, branch restarted, PR #5 opened
 
 **What happened:** While Phase C2 (Mastodon OAuth) was still being built on
