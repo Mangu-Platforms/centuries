@@ -46,6 +46,43 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7, part 7 (A8 + B6 + D7; E7 review hardening)
+
+**Three small charter items:** **A8** — platform-parity drift check as a
+vitest suite in existing CI (mutation-verified: a perturbed charLimit
+fails). **B6** — the login page turns a 423 into a live countdown with
+the submit button disabled (`ApiError` now carries the parsed error
+body); e2e-tested via route interception after observing that genuinely
+tripping the lockout flakes same-minute re-runs against the per-IP
+login rate limit. **D7** — the sync scheduler self-reschedules with
+±20% jitter and arms the next tick only after the current one settles
+(no lockstep thundering, no overlapping ticks); per-connection cadence
+deliberately deferred until a scale signal demands it.
+
+**E7 adversarial review returned (29 agents): 8 confirmed findings.**
+One was the retry-vs-tick double-post race already fixed in `307bf6d`
+(the review independently confirmed the fix closes it); one was stale
+against E8 (the composer really schedules now). The remaining six were
+fixed in `303062b`, the deepest being: **PublishTarget now pins its
+compose-time connection** (a user with two accounts on one platform
+could have a retry silently publish through the wrong one — pins also
+applied in the tick worker; a deleted pinned connection fails
+explicitly rather than substituting); **tick-time recovery sweeps** for
+crash-stranded targets (stranded `pending` on an unscheduled job → the
+next tick publishes it, provably safe since a pending target never
+reached a connector; stale `publishing` → flipped to a visible "check
+the platform before retrying" failure, never silently re-attempted);
+**attemptPublish's failure-catch narrowed to the connector call only**
+(a feed-cache collision after a live publish could relabel a live post
+"failed" and invite a double-posting retry); **retry/reconnect rate
+limits re-keyed per authenticated user** (a per-IP pre-auth bucket is
+one shared global bucket behind a reverse proxy, drainable by
+anonymous traffic); plus two web polish fixes (per-job retry lock,
+stale composer error). +4 regression tests.
+
+**Commands run (all green):** lint · **26 files / 194 tests** · build ·
+both e2e specs passed twice back-to-back (flake check).
+
 ### 2026-08-27 — Session 7, part 6 (C7 + D5: capabilities seam + thread drawer)
 
 **Summary:** C7 (capability descriptor) and D5's read-only half in one
