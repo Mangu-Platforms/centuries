@@ -46,6 +46,38 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7, part 4 (E7: per-target retry + a latent app-wide bug)
+
+**Summary:** E7 per the strategy slice order — `POST /api/posts/:id/retry`
+re-attempts only a job's failed targets (rate-limited, race-safe via an
+atomic failed→pending claim so a double-clicked retry can never
+double-post), with Retry buttons in publishing history and the composer
+results panel. Tests written first (6, observed 5/6 red before
+implementation). The "live pending→result rows" half is split out as E14.
+
+**The real story — a latent app-wide bug found by live verification:**
+the first browser walkthrough of the retry button failed, and the
+root cause was NOT the new code: the web client's `request()` always
+sent `Content-Type: application/json`, and Fastify 400s any body-less
+POST claiming a JSON body (`FST_ERR_CTP_EMPTY_JSON_BODY`). That means
+**like, bookmark, logout, logout-all, and resend-verification have been
+silently broken in the web UI** — the optimistic like rolled back on
+perfectly healthy servers (post-F3 with an error toast; before that,
+invisibly). Reproduced via curl before touching anything, fixed by only
+sending the header when a body exists, and guarded with a new e2e step
+asserting a like persists across reload. Also gave like/bookmark
+state-reflecting `aria-label`s + `aria-pressed` (screen-reader users
+previously couldn't tell liked state). Lesson repeated from C5's review:
+mock- and inject-level tests never send real browser headers — only the
+e2e path could catch this, and it only did because the charter insists
+on verifying by actually running the UI.
+
+**Commands run (all green):** lint · **22 files / 168 tests** (6 new) ·
+build · e2e (now includes the like-regression step) · live walkthrough
+with screenshots: a genuinely failed target healed through the history
+Retry button (success toast, badges patched in place), like persisting
+across reload. DB reseeded.
+
 ### 2026-08-27 — Session 7, part 3 (Phase C5: connector resilience)
 
 **Summary:** With C6 shipped, C5 was the last non-parked charter item in
