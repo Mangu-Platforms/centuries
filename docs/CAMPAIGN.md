@@ -46,45 +46,44 @@ test or visible UI change.
 
 ## Session log
 
-### 2026-08-27 — Session 7, part 1 (strategy-pack backlog reconciliation)
+### 2026-08-27 — Session 7, part 3 (Phase C5: connector resilience)
 
-**Context on arrival:** fresh container; branch
-`claude/nexus-1242-autonomous-build-vo8ecx` exists locally at exactly the
-default branch's tip (`d7c2e92`, 0 ahead / 0 behind) — its remote copy was
-deleted after PR #6 merged, so this session restarts the branch from merged
-history per the merged-PR protocol. HEAD is the founder's own upload commit
-(`d7c2e92`, "Add files via upload"): an 11-doc strategy pack + interactive
-UI prototype, landed in `959/`.
+**Summary:** With C6 shipped, C5 was the last non-parked charter item in
+Phase C. Tests were authored first (18 cases in `resilience.test.ts`),
+though — honest note — the first execution happened after the
+implementation was written, so the red state was never observed for this
+slice (unlike part 2's 7/8 observed failures); the tests assert
+mock-call counts and breaker state that a pass-through wrapper could not
+satisfy, so they are not tautological.
 
-**Arrival verification (all green before any change):** `npm install` →
-`cp` both env examples → `npm run db:setup` (demo user + 5 connections +
-40 feed posts seeded) → `npm run lint` (API tsc clean; web next-lint clean
-with 2 pre-existing `react-hooks/exhaustive-deps` warnings, non-blocking)
-→ `npm test` (**19 files / 120 tests, all green**) → `npm run build` (API
-+ web clean).
+**What shipped:** `src/lib/resilience.ts` + registry wiring + the
+`refreshCredentials` seam on `PlatformConnector` +
+`ConnectionContext.connectionId` threaded through every call site (see
+the C5 backlog note for full behavior). Design decisions worth
+remembering: retry only *provably* transient failures — a status-less,
+code-less error is indistinguishable from a rejection and is NOT
+retried, which also keeps every existing mocked-failure test fast and
+unchanged; publish is never auto-retried on a network failure
+(double-post risk — recovery is E7's user-driven per-target retry) and
+exactly once on 429; the breaker is in-process state, documented as a
+single-instance limitation until G1+.
 
-**What shipped (docs only):**
-- `git mv 959 docs/strategy` — the pack now lives where the campaign
-  prompt and all traceability references expect it; history preserved.
-- `docs/BACKLOG.md` reconciled with the pack: **26 new items** (A8, B6,
-  B7, C7–C10, D7–D9, E7–E13, F7–F14, G7–G12), every existing item ID
-  preserved untouched, each new item traced to its strategy doc + section;
-  extra pack detail appended to existing items' Notes (C5, C6, D5, D6, G1,
-  G3–G6, B2a, C2b) instead of duplicating them; a "Strategy pack
-  reconciliation" section records the prioritization rule
-  (charter-phase items outrank future-state items), the staleness
-  resolution (pack audited pre-PR-#6; backlog wins on E3/E4/E5/F1/F3/F5
-  status), and a **6-entry contradiction register for the founder** (BRD §6
-  v1-scope vs DMs/analytics-v2/multi-account; "no new frameworks" vs
-  mobile/TanStack/BullMQ/Meilisearch; F5 vs `/pricing`+`/changelog`+`/docs`;
-  `/dashboard`→`/app` rename; branding; monetization sequencing). Items
-  directly hit by an unresolved contradiction are held at BLOCKED (C10,
-  F9, F14, G10) rather than TODO, so no future session silently picks a
-  side.
+**Commands run (all green):** `npm run lint` · `npm test` — **21 files /
+150 tests** (18 new) · `npm run build` · Playwright e2e golden path
+(10.7s) against a fresh dev stack — demo connectors are unwrapped, so
+the zero-credential path is bit-for-bit unchanged. Live-API resilience
+behavior (real 429s, real token expiry) is mock-verified only; real
+validation rides on the C1a/C2a human unlocks.
 
-**Next step:** part 2 of this session takes **C6 + C1b** (connection
-health UI) — the highest-priority unblocked charter-phase TODO, and the
-strategy pack's own #1 build recommendation (`docs/strategy/05` §E.1).
+**Ops note for future sessions:** running `npm run build` while `npm run
+dev` is up corrupts the web dev server's `.next` (both write it —
+"Cannot find module './NNN.js'" 500s). Kill the dev stack or
+`rm -rf apps/web/.next` and restart after building.
+
+**Review:** the same adversarial review as part 2 is running on this
+slice's diff at push time (pushed before the verdict per the repo's
+commit-and-push hook; PR #8 is a draft and CI re-runs on every push).
+Outcome and any fixes land in the next commit on this branch.
 
 ### 2026-08-27 — Session 7, part 2 (Phase C6 + C1b: connection health)
 
@@ -185,6 +184,46 @@ jitter, token-refresh hook, per-connection circuit breaker so one dead
 platform can't sink `/api/feed`) — the last non-parked charter item in
 Phase C, now with C6's `lastError`/status UI to surface its state. Then
 E7 (per-target retry) per the strategy pack's slice order.
+
+### 2026-08-27 — Session 7, part 1 (strategy-pack backlog reconciliation)
+
+**Context on arrival:** fresh container; branch
+`claude/nexus-1242-autonomous-build-vo8ecx` exists locally at exactly the
+default branch's tip (`d7c2e92`, 0 ahead / 0 behind) — its remote copy was
+deleted after PR #6 merged, so this session restarts the branch from merged
+history per the merged-PR protocol. HEAD is the founder's own upload commit
+(`d7c2e92`, "Add files via upload"): an 11-doc strategy pack + interactive
+UI prototype, landed in `959/`.
+
+**Arrival verification (all green before any change):** `npm install` →
+`cp` both env examples → `npm run db:setup` (demo user + 5 connections +
+40 feed posts seeded) → `npm run lint` (API tsc clean; web next-lint clean
+with 2 pre-existing `react-hooks/exhaustive-deps` warnings, non-blocking)
+→ `npm test` (**19 files / 120 tests, all green**) → `npm run build` (API
++ web clean).
+
+**What shipped (docs only):**
+- `git mv 959 docs/strategy` — the pack now lives where the campaign
+  prompt and all traceability references expect it; history preserved.
+- `docs/BACKLOG.md` reconciled with the pack: **26 new items** (A8, B6,
+  B7, C7–C10, D7–D9, E7–E13, F7–F14, G7–G12), every existing item ID
+  preserved untouched, each new item traced to its strategy doc + section;
+  extra pack detail appended to existing items' Notes (C5, C6, D5, D6, G1,
+  G3–G6, B2a, C2b) instead of duplicating them; a "Strategy pack
+  reconciliation" section records the prioritization rule
+  (charter-phase items outrank future-state items), the staleness
+  resolution (pack audited pre-PR-#6; backlog wins on E3/E4/E5/F1/F3/F5
+  status), and a **6-entry contradiction register for the founder** (BRD §6
+  v1-scope vs DMs/analytics-v2/multi-account; "no new frameworks" vs
+  mobile/TanStack/BullMQ/Meilisearch; F5 vs `/pricing`+`/changelog`+`/docs`;
+  `/dashboard`→`/app` rename; branding; monetization sequencing). Items
+  directly hit by an unresolved contradiction are held at BLOCKED (C10,
+  F9, F14, G10) rather than TODO, so no future session silently picks a
+  side.
+
+**Next step:** part 2 of this session takes **C6 + C1b** (connection
+health UI) — the highest-priority unblocked charter-phase TODO, and the
+strategy pack's own #1 build recommendation (`docs/strategy/05` §E.1).
 
 ### 2026-08-27 — Session 6 (Phase F1: real analytics)
 
