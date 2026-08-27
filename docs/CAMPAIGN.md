@@ -46,6 +46,78 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 9 (Phase G4: security pass — CSP, CORS audit, secret hygiene)
+
+**Summary:** PR #7 (Phase F close-out) still open, draft, `mergeable_state:
+clean` — nothing needed there this cycle. Picked **G4**, per Session 8's
+own "Next step" recommendation (self-contained, doesn't depend on G2/G3,
+directly matters for a real deploy). Scoped it by reading the actual code
+in `config.ts`/`app.ts` rather than assuming what was missing.
+
+**What shipped, three parts:**
+- **Secret hygiene.** `DATA_KEY` and `CRON_SECRET` already refused to boot
+  with an insecure default in production; `JWT_SECRET` didn't — it fell
+  back to a hardcoded, repo-visible string unconditionally, which in a
+  real prod deploy that forgot to set it would mean every access token
+  this API issues is signed with a secret anyone can read in this
+  codebase's git history. Fixed with `resolveJwtSecret()` in `config.ts`:
+  throws synchronously at boot when `NODE_ENV === "production"` and
+  `JWT_SECRET` is unset, matching the other two secrets' existing pattern
+  exactly. Verified manually via three direct `node
+  --experimental-strip-types` invocations (prod+unset throws with the
+  intended message, prod+set returns the set value, dev returns the
+  fallback) — same verification style already used for `DATA_KEY`/
+  `CRON_SECRET`, since this is a boot-time guard with no natural unit-test
+  seam. `.env.example`'s `JWT_SECRET` comment updated to document the new
+  prod-required behavior.
+- **CSP + security headers.** Added `@fastify/helmet`, registered in
+  `app.ts` right after CORS. Identified and pre-empted a real risk before
+  it could break anything: helmet's default `crossOriginResourcePolicy:
+  "same-origin"` would make browsers silently refuse `GET /uploads/:key`
+  (E3's media route), which is deliberately fetched cross-origin as a
+  plain `<img src>` by the separately-hosted web app — overridden to
+  `{ policy: "cross-origin" }` before ever registering helmet, not as a
+  reactive fix.
+- **CORS audit.** Read `config.ts`'s `corsOrigin` parsing — already an
+  exact-match array (`CORS_ORIGIN` split on commas, trimmed, passed
+  straight to `@fastify/cors`'s `origin` option), no wildcard/regex
+  anywhere. No code change needed; documented the confirmation in
+  `docs/BACKLOG.md` instead of silently doing nothing.
+
+**Verified end-to-end against a live server, not just "types compile":**
+`npm run lint && npm test && npm run build` all green (127/127 tests,
+unchanged count). Confirmed via `curl` that `Cross-Origin-Resource-Policy:
+cross-origin` is actually present on live API responses. Then — since the
+D4 demo images render via inline `data:` URIs and don't exercise CORP at
+all — the one path that actually does: a real headless-browser session
+logged in as the demo account, opened the composer, uploaded a genuine
+4×4 PNG through the real file input (a real `POST /api/media/upload`, not
+mocked), and confirmed the resulting `<img
+src="http://localhost:4000/uploads/...">` — served cross-origin from the
+API's own origin — actually rendered (`naturalWidth` matched the real
+file) with helmet active, zero CSP/CORP console errors. Cleaned up the
+test upload artifact from `apps/api/uploads/` afterward.
+
+**Commands run (all green):** `npm run lint`, `npm test` (127/127),
+`npm run build`; live smoke test as described above via a headless
+Chromium session against both dev servers running locally.
+
+**Files touched:** `apps/api/src/config.ts`, `apps/api/src/app.ts`,
+`apps/api/package.json` (+`package-lock.json`, `@fastify/helmet` added),
+`apps/api/.env.example`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase G
+items: G2 (harden Railway/Vercel docs, preview deploys), G3 (observability
+— pino logs, metrics, error reporting hook), G5 (improve
+autonomous_agent.py — last priority, product over agent), G6 (OPERATOR.md
+— how to run, env matrix, add a fifth platform; also the campaign's own
+close-out signal once every other item is DONE). G3 (observability) is a
+reasonable next pick — self-contained, and pino structured logging is
+already half-present via `app.ts`'s existing logger config, so it's a
+natural extension rather than new ground.
+
 ### 2026-08-27 — Session 8 (Phase G1: Postgres datasource + real migrations)
 
 **Summary:** PR #7 (Phase F1+F2 close-out) still open, green, mergeable —
