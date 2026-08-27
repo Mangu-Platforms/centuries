@@ -54,6 +54,7 @@ export async function importTimelinePosts(params: {
         repostCount: p.repostCount,
         replyCount: p.replyCount,
         postedAt: p.postedAt,
+        mirrorRef: p.mirrorRef ?? "",
       },
       update: {
         authorName: p.authorName,
@@ -63,6 +64,7 @@ export async function importTimelinePosts(params: {
         likeCount: p.likeCount,
         repostCount: p.repostCount,
         replyCount: p.replyCount,
+        mirrorRef: p.mirrorRef ?? "",
       },
     });
   }

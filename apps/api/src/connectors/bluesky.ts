@@ -2,7 +2,7 @@ import { AtpAgent } from "@atproto/api";
 import { PLATFORMS } from "../config.js";
 import { avatarFor } from "./demo.js";
 import { registerLiveConnector } from "./registry.js";
-import type { ConnectionContext, PlatformConnector, PublishResult, RemotePost } from "./types.js";
+import type { ConnectionContext, MirrorRef, PlatformConnector, PublishResult, RemotePost } from "./types.js";
 
 // Bluesky (AT Protocol) via app password — Phase C1. No OAuth developer app
 // needed: the user generates their own app password in Bluesky settings and
@@ -67,6 +67,10 @@ class BlueskyConnector implements PlatformConnector {
         repostCount: post.repostCount ?? 0,
         replyCount: post.replyCount ?? 0,
         postedAt: new Date(post.indexedAt),
+        // AT Protocol addresses a like by the liked post's uri *and* cid
+        // together, not uri alone -- both travel together as one opaque
+        // JSON reference (externalId only holds the uri).
+        mirrorRef: JSON.stringify({ uri: post.uri, cid: post.cid }),
       };
     });
   }
@@ -77,6 +81,24 @@ class BlueskyConnector implements PlatformConnector {
     const agent = await loginAgent(ctx);
     const res = await agent.post({ text: content, createdAt: new Date().toISOString() });
     return { externalId: res.uri, latencyMs: Date.now() - start };
+  }
+
+  // No setBookmarked: AT Protocol/Bluesky has no native "bookmark" record
+  // type in the lexicons this connector already depends on, unlike likes
+  // (app.bsky.feed.like) and reposts. Bookmarking a Bluesky post in NEXUS
+  // stays local-only rather than faking a mirror that doesn't exist.
+  async setLiked(ctx: ConnectionContext, ref: MirrorRef, liked: boolean): Promise<{ likeMirrorRef?: string } | void> {
+    const agent = await loginAgent(ctx);
+    if (liked) {
+      const { uri, cid } = JSON.parse(ref.mirrorRef) as { uri: string; cid: string };
+      const like = await agent.like(uri, cid);
+      // The like is its own record, addressed by its own URI -- must be
+      // persisted to ever be able to undo this like later.
+      return { likeMirrorRef: like.uri };
+    }
+    if (ref.likeMirrorRef) {
+      await agent.deleteLike(ref.likeMirrorRef);
+    }
   }
 }
 

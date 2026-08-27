@@ -125,6 +125,17 @@ model FeedPost {
   bookmarked   Boolean  @default(false)
   isOwn        Boolean  @default(false) // true if authored by the user via cross-post
   postedAt     DateTime @default(now())
+  // Phase F2: connector-opaque reference needed to mirror a like/bookmark
+  // back to the real platform (e.g. a Mastodon status id, or a Bluesky
+  // uri+cid pair as JSON). Empty for demo-imported posts and any post
+  // fetched before this field existed -- mirroring is skipped whenever
+  // it's empty, so those posts just stay local-only, same as before.
+  mirrorRef String @default("")
+  // Bluesky only: the URI of the "like" record created by a previous
+  // mirrored like, needed to delete that record again on unlike (AT
+  // Protocol likes are their own record, addressed by their own URI, not
+  // derivable from the liked post's uri/cid). Unused by other platforms.
+  likeMirrorRef String @default("")
 
   user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   connection Connection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
