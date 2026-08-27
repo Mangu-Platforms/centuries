@@ -46,6 +46,76 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 8 (Phase G1: Postgres datasource + real migrations)
+
+**Summary:** PR #7 (Phase F1+F2 close-out) still open, green, mergeable —
+nothing needed there this cycle. Picked **G1**, the first Phase G item and
+the one this log's own last "Next step" flagged as the natural starting
+point, since the rest of Phase G (deploy docs, CSP/CORS hardening,
+OPERATOR.md) reads easier once the production datasource story is settled.
+
+**What shipped:** Prisma can't switch a single schema's `provider` field
+based on an env var — it's a literal string, checked at generate time —
+so supporting SQLite for zero-setup local dev (this campaign's whole
+philosophy) *and* durable Postgres in production simultaneously needs two
+schema files. Two hand-maintained copies would drift the first time a
+model changed in one and not the other, so this uses generation instead
+of duplication: `schema.prisma` (SQLite) stays the single source of truth
+for every model; a new script, `db:generate-prod-schema`, derives
+`schema.production.prisma` from it by swapping only the datasource block.
+New `db:migrate:dev`/`db:migrate:deploy` scripts run real tracked Prisma
+migrations (`prisma/migrations/`) against the generated schema for
+Postgres, while SQLite dev keeps its existing zero-ceremony `db push`.
+
+**Verified against a genuine Postgres server, not just types passing:**
+this sandbox turned out to have `postgresql-16` actually installed (just
+not running) — started it, created a scratch role/database, generated the
+real initial migration (`migrate dev --create-only`, hand-reviewed the
+SQL for every model/index/FK), applied it via `migrate deploy` to a fresh
+empty database (the exact command a production deploy runs), and ran the
+**full 127-test suite green against real Postgres**, zero code changes
+needed outside `prisma/`. Also smoke-tested a live server against it —
+seeded the demo account, exercised login, feed pagination, the F1
+analytics endpoint, and a real F2 mirrored-like request, all correct.
+Cleaned up the temporary Postgres role/database/server afterward,
+restored `.env` to SQLite, regenerated the SQLite client, and re-ran the
+full suite to confirm the normal dev path is completely unaffected.
+
+**Also:** the new script lives in `apps/api/scripts/` (outside `src/`,
+which `tsconfig.json`'s `rootDir` deliberately excludes from the build),
+so it wasn't being typechecked by `npm run lint` at all — added
+`tsconfig.scripts.json` and a second `tsc` step so it is. Updated
+`DEPLOY.md`'s old "hand-edit the schema, redeploy" instructions with the
+real flow. Deliberately left `railway.json`'s actual start command
+untouched — flipping it now, before a human provisions real Postgres and
+sets `DATABASE_URL` in lockstep, would break the currently-deployed
+SQLite-on-a-volume service on its very next deploy.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all green
+(127/127, unchanged count — this phase touched no application code, only
+`prisma/`, `scripts/`, and docs). See above for the live-Postgres
+verification, which isn't part of the normal CI-mirrored command sequence
+since no Postgres is available in CI.
+
+**Files touched:** `apps/api/prisma/schema.prisma` (header comment only),
+`apps/api/prisma/schema.production.prisma` (new, generated),
+`apps/api/prisma/migrations/20260827124944_init/migration.sql` (new),
+`apps/api/scripts/generateProductionSchema.ts` (new),
+`apps/api/tsconfig.scripts.json` (new), `apps/api/package.json`,
+`DEPLOY.md`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase G
+items: G2 (harden Railway/Vercel docs, preview deploys), G3 (observability
+— pino logs, metrics, error reporting hook), G4 (security pass — CSP,
+exact CORS origins, secret hygiene), G5 (improve autonomous_agent.py —
+last priority, product over agent), G6 (OPERATOR.md — how to run, env
+matrix, add a fifth platform; also the campaign's own close-out signal
+once every other item is DONE). G4 (security) is a reasonable next pick —
+it's self-contained, doesn't depend on G2/G3, and directly matters for a
+real deploy.
+
 ### 2026-08-27 — Session 7 (Phase F2: mirrored likes/bookmarks — Phase F complete)
 
 **Summary:** PR #6 (Phase E3 → F1) was merged by a human while this session
