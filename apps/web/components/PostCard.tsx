@@ -103,7 +103,14 @@ function BookmarkIcon({ filled }: { filled: boolean }) {
   );
 }
 
-export function PostCard({ post }: { post: FeedPost }) {
+export function PostCard({
+  post,
+  onViewThread,
+}: {
+  post: FeedPost;
+  /** When set (and the post's connection supports threads), the reply count becomes a "view thread" button (D5). */
+  onViewThread?: (post: FeedPost) => void;
+}) {
   const [state, setState] = useState(post);
   const [busy, setBusy] = useState(false);
   const { showToast } = useToast();
@@ -187,10 +194,21 @@ export function PostCard({ post }: { post: FeedPost }) {
               <RepostIcon />
               <span className="tabular-nums">{state.repostCount.toLocaleString()}</span>
             </span>
-            <span className="flex items-center gap-1.5 rounded-full px-2.5 py-1.5">
-              <ReplyIcon />
-              <span className="tabular-nums">{state.replyCount.toLocaleString()}</span>
-            </span>
+            {onViewThread && state.threadAvailable ? (
+              <button
+                onClick={() => onViewThread(state)}
+                aria-label="View thread"
+                className="flex items-center gap-1.5 rounded-full px-2.5 py-1.5 transition hover:bg-sky-50 hover:text-sky-600 dark:hover:bg-sky-500/10"
+              >
+                <ReplyIcon />
+                <span className="tabular-nums">{state.replyCount.toLocaleString()}</span>
+              </button>
+            ) : (
+              <span className="flex items-center gap-1.5 rounded-full px-2.5 py-1.5">
+                <ReplyIcon />
+                <span className="tabular-nums">{state.replyCount.toLocaleString()}</span>
+              </span>
+            )}
             <button
               onClick={toggleBookmark}
               className={`ml-auto rounded-full p-1.5 transition hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-brand-500/10 ${

@@ -377,6 +377,42 @@ export function wrapConnector(
       ? (ctx) => connector.refreshCredentials!(ctx)
       : undefined,
 
+    // Optional capability methods (C7) pass through only when implemented,
+    // so capabilitiesOf() reports the same answer for the wrapped and raw
+    // connector. Thread reads get the same guard/retry policy as timeline
+    // reads; replies are a publish (double-post risk) and get publish's
+    // no-retry-on-network policy via a single guarded attempt.
+    fetchThread: connector.fetchThread
+      ? (ctx, externalId) =>
+          guarded(ctx, async (c, probe) => {
+            const maxAttempts = probe ? 1 : opts.maxFetchAttempts;
+            for (let attempt = 0; ; attempt++) {
+              try {
+                return await withAttemptTimeout(
+                  () => connector.fetchThread!(c, externalId),
+                  opts.attemptTimeoutMs,
+                  `${connector.platform} thread fetch`,
+                );
+              } catch (err) {
+                if (attempt >= maxAttempts - 1 || !isTransient(err)) throw err;
+                const delay = backoffDelay(attempt, err, opts);
+                if (delay === null) throw err;
+                await sleep(delay);
+              }
+            }
+          })
+      : undefined,
+    publishReply: connector.publishReply
+      ? (ctx, content, inReplyTo) =>
+          guarded(ctx, (c) =>
+            withAttemptTimeout(
+              () => connector.publishReply!(c, content, inReplyTo),
+              opts.attemptTimeoutMs,
+              `${connector.platform} reply`,
+            ),
+          )
+      : undefined,
+
     fetchTimeline: (ctx, limit) =>
       guarded(ctx, async (initialCtx, probe) => {
         // A half-open probe is a single attempt: its job is to answer "is

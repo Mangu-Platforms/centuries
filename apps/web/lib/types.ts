@@ -55,6 +55,22 @@ export interface FeedPost {
   bookmarked: boolean;
   isOwn: boolean;
   postedAt: string;
+  /** Whether this post's connection supports thread viewing (C7/D5). */
+  threadAvailable?: boolean;
+}
+
+/** A connector-supplied reply inside a thread (D5) — not a cached FeedPost row. */
+export interface ThreadReply {
+  externalId: string;
+  authorHandle: string;
+  authorName: string;
+  authorAvatar: string;
+  content: string;
+  mediaUrls: string[];
+  likeCount: number;
+  repostCount: number;
+  replyCount: number;
+  postedAt: string;
 }
 
 export interface PublishTargetResult {

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import type { FeedPost, PlatformId } from "@/lib/types";
 import { PLATFORM_META, PLATFORM_ORDER, PlatformIcon } from "@/lib/platforms";
 import { PostCard } from "@/components/PostCard";
+import { ThreadDrawer } from "@/components/ThreadDrawer";
 
 const FILTERS: Array<{ id: "all" | PlatformId; label: string }> = [
   { id: "all", label: "All" },
@@ -19,6 +20,7 @@ export default function FeedPage() {
   const [bookmarked, setBookmarked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [threadPost, setThreadPost] = useState<FeedPost | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,7 +145,7 @@ export default function FeedPage() {
       ) : (
         <div className="space-y-3">
           {posts.map((p) => (
-            <PostCard key={p.id} post={p} />
+            <PostCard key={p.id} post={p} onViewThread={setThreadPost} />
           ))}
         </div>
       )}
@@ -153,6 +155,8 @@ export default function FeedPage() {
           {loadingMore ? "Loading…" : "Load more"}
         </button>
       )}
+
+      {threadPost && <ThreadDrawer post={threadPost} onClose={() => setThreadPost(null)} />}
     </div>
   );
 }

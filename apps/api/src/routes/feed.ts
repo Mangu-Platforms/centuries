@@ -2,6 +2,10 @@ import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { isPlatform } from "../config.js";
+import { getConnector } from "../connectors/registry.js";
+import { capabilitiesOf } from "../connectors/types.js";
+import { decryptSecret } from "../lib/crypto.js";
+import { INTERACTIVE_RESILIENCE } from "../lib/resilience.js";
 
 function serialize(p: {
   id: string;
@@ -63,10 +67,98 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
 
     const hasMore = posts.length > limit;
     const page = hasMore ? posts.slice(0, limit) : posts;
+
+    // Phase C7/D5: per-post thread availability, so the UI can
+    // capability-gate the "view thread" affordance per network instead of
+    // pretending uniformity. Resolved the same way a thread fetch would be
+    // (connection credentials decide demo vs live), memoized per
+    // (platform, hasCredentials) — at most one resolution per pair.
+    const connections = await prisma.connection.findMany({
+      where: { userId: request.user.sub },
+      select: { id: true, appPasswordEnc: true, accessTokenEnc: true },
+    });
+    const credsByConnection = new Map(
+      connections.map((c) => [c.id, Boolean(c.appPasswordEnc || c.accessTokenEnc)]),
+    );
+    const capabilityCache = new Map<string, boolean>();
+    const threadAvailable = (platform: string, connectionId: string | null): boolean => {
+      if (!isPlatform(platform) || !connectionId) return false;
+      const hasCreds = credsByConnection.get(connectionId);
+      if (hasCreds === undefined) return false; // connection since deleted
+      const key = `${platform}:${hasCreds}`;
+      if (!capabilityCache.has(key)) {
+        capabilityCache.set(key, capabilitiesOf(getConnector(platform, hasCreds)).thread);
+      }
+      return capabilityCache.get(key)!;
+    };
+
     return {
-      posts: page.map(serialize),
+      posts: page.map((p) => ({
+        ...serialize(p),
+        threadAvailable: threadAvailable(p.platform, p.connectionId),
+      })),
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
+  });
+
+  // Phase D5 (read-only half): the conversation around one cached post.
+  // The locally cached row is the root (it's what the user clicked, and
+  // for own posts it's the only true copy); the connector supplies the
+  // replies. Capability-gated: a connector without fetchThread 404s here
+  // and the feed marks its posts threadAvailable: false.
+  app.get("/api/feed/:id/thread", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const post = await prisma.feedPost.findFirst({ where: { id, userId: request.user.sub } });
+    if (!post) return reply.code(404).send({ error: "Post not found" });
+    if (!isPlatform(post.platform)) return reply.code(404).send({ error: "Thread not available" });
+
+    if (!post.connectionId) {
+      return reply.code(404).send({ error: "This post's connection is gone — thread not available" });
+    }
+    const connection = await prisma.connection.findUnique({ where: { id: post.connectionId } });
+    if (!connection || connection.userId !== request.user.sub) {
+      return reply.code(404).send({ error: "This post's connection is gone — thread not available" });
+    }
+
+    const hasCredentials = Boolean(connection.appPasswordEnc || connection.accessTokenEnc);
+    const connector = getConnector(post.platform, hasCredentials, INTERACTIVE_RESILIENCE);
+    if (!capabilitiesOf(connector).thread) {
+      return reply.code(404).send({ error: "Threads aren't available for this connection yet" });
+    }
+
+    let remote;
+    try {
+      remote = await connector.fetchThread!(
+        {
+          handle: connection.handle,
+          instance: connection.instance || undefined,
+          appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
+          accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+          connectionId: connection.id,
+        },
+        post.externalId,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to fetch the thread";
+      return reply.code(502).send({ error: message });
+    }
+
+    const replies = remote
+      .filter((r) => r.externalId !== post.externalId)
+      .map((r) => ({
+        externalId: r.externalId,
+        authorHandle: r.authorHandle,
+        authorName: r.authorName,
+        authorAvatar: r.authorAvatar,
+        content: r.content,
+        mediaUrls: r.mediaUrls,
+        likeCount: r.likeCount,
+        repostCount: r.repostCount,
+        replyCount: r.replyCount,
+        postedAt: r.postedAt,
+      }));
+
+    return { root: serialize(post), replies };
   });
 
   app.post("/api/feed/:id/like", { preHandler: [app.authenticate] }, async (request, reply) => {

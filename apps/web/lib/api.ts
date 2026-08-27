@@ -7,6 +7,7 @@ import type {
   PublishHistoryItem,
   PublishTargetResult,
   SessionInfo,
+  ThreadReply,
   User,
 } from "./types";
 
@@ -212,6 +213,9 @@ export const api = {
     const qs = q.toString();
     return request<{ posts: FeedPost[]; nextCursor: string | null }>(`/api/feed${qs ? `?${qs}` : ""}`);
   },
+
+  thread: (id: string) =>
+    request<{ root: FeedPost; replies: ThreadReply[] }>(`/api/feed/${id}/thread`),
 
   like: (id: string) => request<{ post: FeedPost }>(`/api/feed/${id}/like`, { method: "POST" }),
 

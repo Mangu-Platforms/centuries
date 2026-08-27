@@ -63,4 +63,34 @@ export interface PlatformConnector {
    * PKCE connector (C3), whose access tokens expire hourly.
    */
   refreshCredentials?(ctx: ConnectionContext): Promise<RefreshedCredentials | null>;
+  /**
+   * Optional (Phase C7/D5): fetch the conversation around one post — the
+   * root post first, then its replies in display order. Implement only
+   * where the platform actually exposes threads; the UI capability-gates
+   * on this via capabilitiesOf().
+   */
+  fetchThread?(ctx: ConnectionContext, externalId: string): Promise<RemotePost[]>;
+  /**
+   * Optional (Phase C7/D5-later): publish a reply to an existing remote
+   * post. Not called anywhere yet — the seam exists so thread reading and
+   * reply writing land as separate, individually testable slices.
+   */
+  publishReply?(ctx: ConnectionContext, content: string, inReplyToExternalId: string): Promise<PublishResult>;
+}
+
+/**
+ * What a specific connector instance can do beyond the base interface.
+ * Derived from which optional methods it implements — never a separate
+ * hand-maintained table that could drift.
+ */
+export interface ConnectorCapabilities {
+  thread: boolean;
+  reply: boolean;
+}
+
+export function capabilitiesOf(connector: PlatformConnector): ConnectorCapabilities {
+  return {
+    thread: typeof connector.fetchThread === "function",
+    reply: typeof connector.publishReply === "function",
+  };
 }

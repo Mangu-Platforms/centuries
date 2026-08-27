@@ -110,8 +110,93 @@ function demoMediaUrlsFor(seed: number): string[] {
   return Array.from({ length: count }, (_, i) => demoImageFor(seed + i));
 }
 
+// Reply snippets are platform-agnostic conversation, picked deterministically
+// per thread — same philosophy as SNIPPETS.
+const REPLY_SNIPPETS = [
+  "Completely agree with this take.",
+  "Counterpoint: it depends a lot on the instance you're on.",
+  "Saving this thread for later, great stuff.",
+  "Do you have a link to the longer write-up?",
+  "This matches what we've seen in production too.",
+  "Hard disagree, but I appreciate the argument being laid out.",
+  "The replies to this are gold.",
+  "Came here to say exactly this.",
+];
+
 class DemoConnector implements PlatformConnector {
   constructor(public readonly platform: PlatformId) {}
+
+  /**
+   * Deterministic demo thread for a post (Phase C7/D5): the root post
+   * first, then 2–5 replies whose ids/authors/content derive from the
+   * root's externalId, so the same thread renders identically on every
+   * open. For a timeline id in this connector's own
+   * `${platform}-${base}-${i}` shape the root is reconstructed exactly as
+   * fetchTimeline built it; any other id (e.g. a cross-post's own id)
+   * gets a seed-derived root — callers that already hold the real root
+   * (the feed cache does) should prefer their copy and use the tail.
+   */
+  async fetchThread(ctx: ConnectionContext, externalId: string): Promise<RemotePost[]> {
+    void ctx;
+    const authors = AUTHORS[this.platform];
+    const color = PLATFORMS[this.platform].color;
+    const seed = hashString(externalId);
+    const now = Date.now();
+
+    let root: RemotePost;
+    const parsed = externalId.match(new RegExp(`^${this.platform}-(\\d+)-(\\d+)$`));
+    if (parsed) {
+      const base = Number(parsed[1]);
+      const i = Number(parsed[2]);
+      const author = authors[(base + i) % authors.length];
+      const minutesAgo = (i + 1) * (11 + ((base + i) % 19));
+      root = {
+        externalId,
+        authorHandle: author.handle,
+        authorName: author.name,
+        authorAvatar: avatarFor(author.name, color),
+        content: SNIPPETS[this.platform][(base + i * 7) % SNIPPETS[this.platform].length],
+        mediaUrls: demoMediaUrlsFor(base + i),
+        likeCount: ((base + i * 13) % 950) + 5,
+        repostCount: ((base + i * 5) % 220) + 1,
+        replyCount: ((base + i * 3) % 90) + 0,
+        postedAt: new Date(now - minutesAgo * 60_000),
+      };
+    } else {
+      const author = authors[seed % authors.length];
+      root = {
+        externalId,
+        authorHandle: author.handle,
+        authorName: author.name,
+        authorAvatar: avatarFor(author.name, color),
+        content: SNIPPETS[this.platform][seed % SNIPPETS[this.platform].length],
+        mediaUrls: [],
+        likeCount: (seed % 950) + 5,
+        repostCount: (seed % 220) + 1,
+        replyCount: (seed % 90) + 0,
+        postedAt: new Date(now - 60 * 60_000),
+      };
+    }
+
+    const replyCount = 2 + (seed % 4); // 2–5 replies
+    const replies: RemotePost[] = [];
+    for (let k = 0; k < replyCount; k++) {
+      const author = authors[(seed + k + 1) % authors.length];
+      replies.push({
+        externalId: `${externalId}-reply-${k}`,
+        authorHandle: author.handle,
+        authorName: author.name,
+        authorAvatar: avatarFor(author.name, color),
+        content: REPLY_SNIPPETS[(seed + k * 5) % REPLY_SNIPPETS.length],
+        mediaUrls: [],
+        likeCount: (seed + k * 17) % 120,
+        repostCount: (seed + k * 7) % 25,
+        replyCount: 0,
+        postedAt: new Date(root.postedAt.getTime() + (k + 1) * 7 * 60_000),
+      });
+    }
+    return [root, ...replies];
+  }
 
   async fetchTimeline(ctx: ConnectionContext, limit: number): Promise<RemotePost[]> {
     const authors = AUTHORS[this.platform];
