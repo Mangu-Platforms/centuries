@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { isPlatform } from "../config.js";
+import { mirrorBookmark, mirrorLike } from "../lib/mirror.js";
 
 function serialize(p: {
   id: string;
@@ -19,8 +20,14 @@ function serialize(p: {
   bookmarked: boolean;
   isOwn: boolean;
   postedAt: Date;
+  mirrorRef: string;
+  likeMirrorRef: string;
 }) {
-  return { ...p, mediaUrls: JSON.parse(p.mediaUrls) as string[] };
+  // mirrorRef/likeMirrorRef are internal bookkeeping for talking back to
+  // the real platform (Phase F2) -- not useful to the client, so they're
+  // deliberately left out of the response rather than spread in.
+  const { mirrorRef: _mirrorRef, likeMirrorRef: _likeMirrorRef, mediaUrls, ...rest } = p;
+  return { ...rest, mediaUrls: JSON.parse(mediaUrls) as string[] };
 }
 
 export async function feedRoutes(app: FastifyInstance): Promise<void> {
@@ -69,17 +76,29 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  // Phase F2: a like/bookmark is mirrored to the real platform when the
+  // post came from a live connector that supports it (see lib/mirror.ts).
+  // The local toggle always applies, even when the mirror attempt fails --
+  // losing a user's local like over a flaky third-party API would be worse
+  // than the like being out of sync, so a mirror failure is surfaced via
+  // `mirrorError` on the response rather than as a request failure.
   app.post("/api/feed/:id/like", { preHandler: [app.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const post = await prisma.feedPost.findFirst({ where: { id, userId: request.user.sub } });
     if (!post) return reply.code(404).send({ error: "Post not found" });
 
     const liked = !post.liked;
+    const mirror = await mirrorLike(post, liked);
+
     const updated = await prisma.feedPost.update({
       where: { id },
-      data: { liked, likeCount: { increment: liked ? 1 : -1 } },
+      data: {
+        liked,
+        likeCount: { increment: liked ? 1 : -1 },
+        ...(mirror.likeMirrorRef !== undefined ? { likeMirrorRef: mirror.likeMirrorRef } : {}),
+      },
     });
-    return { post: serialize(updated) };
+    return { post: serialize(updated), mirrorError: mirror.error };
   });
 
   app.post("/api/feed/:id/bookmark", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -87,10 +106,13 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
     const post = await prisma.feedPost.findFirst({ where: { id, userId: request.user.sub } });
     if (!post) return reply.code(404).send({ error: "Post not found" });
 
+    const bookmarked = !post.bookmarked;
+    const mirror = await mirrorBookmark(post, bookmarked);
+
     const updated = await prisma.feedPost.update({
       where: { id },
-      data: { bookmarked: !post.bookmarked },
+      data: { bookmarked },
     });
-    return { post: serialize(updated) };
+    return { post: serialize(updated), mirrorError: mirror.error };
   });
 }
