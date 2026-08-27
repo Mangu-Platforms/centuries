@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { FeedPost, PlatformId } from "@/lib/types";
 import { PLATFORM_META, PLATFORM_ORDER, PlatformIcon } from "@/lib/platforms";
@@ -38,8 +38,8 @@ export default function FeedPage() {
     return () => clearTimeout(t);
   }, [load, search]);
 
-  const loadMore = async () => {
-    if (!cursor) return;
+  const loadMore = useCallback(async () => {
+    if (!cursor || loadingMore) return;
     setLoadingMore(true);
     try {
       const res = await api.feed({ cursor, platform, search: search || undefined, bookmarked });
@@ -48,7 +48,51 @@ export default function FeedPage() {
     } finally {
       setLoadingMore(false);
     }
-  };
+  }, [cursor, loadingMore, platform, search, bookmarked]);
+
+  // Phase D8 — infinite scroll: a sentinel ahead of the Load-more button
+  // auto-loads the next page as it approaches the viewport. The button
+  // stays as the no-JS / reduced-motion fallback: users who prefer reduced
+  // motion get explicit paging instead of a feed that moves on its own.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !cursor) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadMore();
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [cursor, loadMore]);
+
+  // Phase D8 — j/k keyboard navigation between posts. Never fires while
+  // the user is typing (inputs/textareas) or holding a modifier, and
+  // never while a dialog (composer, thread drawer) is open.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "j" && e.key !== "k") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (document.querySelector("[role=dialog]")) return;
+
+      const articles = Array.from(document.querySelectorAll<HTMLElement>("article[tabindex]"));
+      if (articles.length === 0) return;
+      const active = document.activeElement;
+      const current = articles.findIndex((a) => a === active || a.contains(active));
+      const next =
+        e.key === "j" ? Math.min(current + 1, articles.length - 1) : Math.max(current <= 0 ? 0 : current - 1, 0);
+      e.preventDefault();
+      articles[next]?.focus();
+      articles[next]?.scrollIntoView({ block: "nearest" });
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -151,9 +195,12 @@ export default function FeedPage() {
       )}
 
       {cursor && !loading && (
-        <button onClick={loadMore} disabled={loadingMore} className="btn-outline w-full py-2.5">
-          {loadingMore ? "Loading…" : "Load more"}
-        </button>
+        <>
+          <div ref={sentinelRef} aria-hidden="true" />
+          <button onClick={() => void loadMore()} disabled={loadingMore} className="btn-outline w-full py-2.5">
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        </>
       )}
 
       {threadPost && <ThreadDrawer post={threadPost} onClose={() => setThreadPost(null)} />}

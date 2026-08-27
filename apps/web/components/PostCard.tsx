@@ -142,7 +142,12 @@ export function PostCard({
   };
 
   return (
-    <article className="card card-hover p-4 sm:p-5">
+    // tabIndex={-1}: programmatically focusable for the feed's j/k
+    // keyboard navigation (D8) without joining the natural Tab order.
+    <article
+      tabIndex={-1}
+      className="card card-hover p-4 outline-none focus:ring-2 focus:ring-brand-400/70 sm:p-5"
+    >
       <div className="flex items-start gap-3">
         <div className="relative shrink-0">
           {state.authorAvatar ? (
