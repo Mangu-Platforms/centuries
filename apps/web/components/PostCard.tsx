@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import type { FeedPost } from "@/lib/types";
 import { PlatformGlyph } from "@/lib/platforms";
+import { useToast } from "@/lib/toast";
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -105,6 +106,7 @@ function BookmarkIcon({ filled }: { filled: boolean }) {
 export function PostCard({ post }: { post: FeedPost }) {
   const [state, setState] = useState(post);
   const [busy, setBusy] = useState(false);
+  const { showToast } = useToast();
 
   const toggleLike = async () => {
     setBusy(true);
@@ -115,6 +117,7 @@ export function PostCard({ post }: { post: FeedPost }) {
       setState(post);
     } catch {
       setState((s) => ({ ...s, liked: !s.liked, likeCount: s.likeCount + (s.liked ? -1 : 1) }));
+      showToast("Couldn't update like. Try again.");
     } finally {
       setBusy(false);
     }
@@ -127,6 +130,7 @@ export function PostCard({ post }: { post: FeedPost }) {
       setState(post);
     } catch {
       setState((s) => ({ ...s, bookmarked: !s.bookmarked }));
+      showToast("Couldn't update bookmark. Try again.");
     }
   };
 

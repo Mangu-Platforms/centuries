@@ -13,8 +13,10 @@ import { connectionRoutes } from "./routes/connections.js";
 import { mastodonAuthRoutes } from "./routes/mastodonAuth.js";
 import { feedRoutes } from "./routes/feed.js";
 import { postRoutes } from "./routes/posts.js";
+import { mediaRoutes } from "./routes/media.js";
 import { internalRoutes } from "./routes/internal.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { analyticsRoutes } from "./routes/analytics.js";
 // Side-effect imports: register each live connector with the connector
 // registry (see connectors/registry.ts). Each live connector as it's
 // implemented (Phase C) gets one line like this — this is the single place
@@ -101,8 +103,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(mastodonAuthRoutes);
   await app.register(feedRoutes);
   await app.register(postRoutes);
+  await app.register(mediaRoutes);
   await app.register(internalRoutes);
   await app.register(dashboardRoutes);
+  await app.register(analyticsRoutes);
 
   return app;
 }

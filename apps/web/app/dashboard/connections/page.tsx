@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import type { Connection, PlatformId } from "@/lib/types";
 import { PLATFORM_META, PLATFORM_ORDER, PlatformGlyph } from "@/lib/platforms";
+import { useToast } from "@/lib/toast";
 
 export default function ConnectionsPage() {
   return (
@@ -25,8 +26,10 @@ function ConnectionsPageInner() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { showToast } = useToast();
 
-  const load = () => api.connections().then((r) => setConnections(r.connections)).catch(() => {});
+  const load = () =>
+    api.connections().then((r) => setConnections(r.connections)).catch(() => showToast("Couldn't load your connections."));
   useEffect(() => {
     load();
   }, []);

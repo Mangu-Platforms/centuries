@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import type { Connection, PlatformId, PublishTargetResult } from "@/lib/types";
 import { PLATFORM_META, PLATFORM_ORDER, PlatformGlyph, PlatformIcon } from "@/lib/platforms";
+
+const MAX_MEDIA = 4; // matches POST /api/posts's mediaUrls.max(4)
 
 export function Composer({
   connections,
@@ -23,6 +25,9 @@ export function Composer({
   const [results, setResults] = useState<PublishTargetResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [mediaUrls, setMediaUrls] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Generated once per mount — this component fully unmounts when the
   // composer closes (see dashboard/layout.tsx's `{composerOpen && ...}`),
   // so a fresh key is picked up next time it opens for a new post, while a
@@ -42,6 +47,33 @@ export function Composer({
     setSelected((s) => (s.includes(p) ? s.filter((x) => x !== p) : [...s, p]));
   };
 
+  const addFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setError(null);
+    const room = MAX_MEDIA - mediaUrls.length;
+    const toUpload = Array.from(files).slice(0, room);
+    if (toUpload.length === 0) return;
+    setUploading(true);
+    try {
+      // Sequential, not Promise.all: keeps upload order == the order the
+      // user picked files in, and avoids hammering the 20/min rate limit
+      // with a burst when someone selects several large images at once.
+      for (const file of toUpload) {
+        const { url } = await api.uploadMedia(file);
+        setMediaUrls((prev) => [...prev, url]);
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to upload media");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const removeMedia = (url: string) => {
+    setMediaUrls((prev) => prev.filter((u) => u !== url));
+  };
+
   const submit = async () => {
     setError(null);
     setResults(null);
@@ -49,7 +81,7 @@ export function Composer({
     if (selected.length === 0) return setError("Select at least one platform.");
     setSubmitting(true);
     try {
-      const { results } = await api.publish(content.trim(), selected, [], idempotencyKey);
+      const { results } = await api.publish(content.trim(), selected, mediaUrls, idempotencyKey);
       setResults(results);
       onPublished?.();
     } catch (e) {
@@ -115,6 +147,48 @@ export function Composer({
               autoFocus
             />
 
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {mediaUrls.map((url) => (
+                <div key={url} className="group relative h-16 w-16 overflow-hidden rounded-lg ring-1 ring-slate-200 dark:ring-slate-700">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={url} alt="" className="h-full w-full object-cover" />
+                  <button
+                    onClick={() => removeMedia(url)}
+                    aria-label="Remove image"
+                    className="absolute right-0.5 top-0.5 rounded-full bg-slate-950/70 p-0.5 text-white opacity-0 transition group-hover:opacity-100"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="h-3 w-3">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+              {mediaUrls.length < MAX_MEDIA && (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="btn-outline flex h-16 w-16 items-center justify-center rounded-lg text-xs disabled:opacity-50"
+                  aria-label="Add photo"
+                >
+                  {uploading ? (
+                    "…"
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="h-5 w-5">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                  )}
+                </button>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                multiple
+                onChange={(e) => addFiles(e.target.files)}
+                className="hidden"
+              />
+            </div>
+
             <p className="section-title mb-2 mt-4">Post to</p>
             <div className="flex flex-wrap items-center gap-2">
               {PLATFORM_ORDER.filter((p) => connectedPlatforms.includes(p)).map((p) => {
@@ -173,7 +247,7 @@ export function Composer({
               <button onClick={onClose} className="btn-outline">
                 Cancel
               </button>
-              <button onClick={submit} disabled={submitting || overLimit} className="btn-primary">
+              <button onClick={submit} disabled={submitting || uploading || overLimit} className="btn-primary">
                 {submitting
                   ? "Posting…"
                   : `Post to ${selected.length} platform${selected.length === 1 ? "" : "s"}`}

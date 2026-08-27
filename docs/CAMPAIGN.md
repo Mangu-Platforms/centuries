@@ -46,6 +46,335 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 6 (Phase F1: real analytics)
+
+**Summary:** PR #6 still open (draft, `mergeable_state: clean`, CI green on
+`b2c92e1`, no new comments beyond the two already-resolved CodeQL threads
+from E3). Picked **F1** — the only Phase F item left besides F2, and its
+backlog note ("depends on live connectors existing") is satisfied now that
+Bluesky and Mastodon have live connectors alongside the demo ones.
+
+**What shipped:** Checked what analytics already existed before building
+anything: `GET /api/dashboard` already returned one lifetime-aggregate
+cross-post success rate, but nothing broke it down per platform, nothing
+surfaced latency anywhere in aggregate form (only per-job, in publish
+history), and "feed volume" was a single lifetime count with no trend.
+New `GET /api/analytics` (`apps/api/src/routes/analytics.ts`): per-platform
+attempts/success/failure counts, success rate, and average latency
+computed from `PublishTarget` rows — latency averaged over *successful*
+attempts only, since a failed attempt's `latencyMs` is always 0
+(`lib/publish.ts` never times a failure) and mixing it in would understate
+real latency for a flaky platform. Also a 14-day feed-volume time series,
+bucketed by UTC calendar day and always including zero-count days so a
+real gap doesn't get silently compressed away. New web page
+`apps/web/app/dashboard/analytics/page.tsx` (added to the sidebar nav
+between Feed and Connections): a bar per platform with attempts/success-
+rate/latency, and a 14-bar volume chart.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all green
+(120/120 tests, 3 new in `analytics.test.ts` covering auth, per-platform
+math with mixed success/failure across two platforms, and day-bucketing
+including a genuinely empty day and a 30-day-old post correctly excluded
+from the 14-day window). Manual smoke test against a live server: reseeded
+the demo account, published two real posts through the composer (all 5
+demo connectors succeed, so this exercises the real success path with
+real per-platform latencies rather than synthetic data), and confirmed via
+a headless-browser screenshot that the analytics page renders correct
+per-platform success rates/latencies and a populated volume chart.
+Reseeded the demo account again afterward so the smoke-test posts don't
+linger as fixture data.
+
+**Files touched:** `apps/api/src/routes/analytics.ts` (new),
+`apps/api/src/app.ts`, `apps/api/src/__tests__/analytics.test.ts` (new),
+`apps/web/app/dashboard/analytics/page.tsx` (new),
+`apps/web/app/dashboard/layout.tsx`, `apps/web/lib/types.ts`,
+`apps/web/lib/api.ts`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open, commit, push. The only remaining
+Phase F item is **F2** (bookmarks/likes mirrored to platform where
+possible) — this needs new connector-interface methods (each connector
+would need a `like`/`bookmark` call, and the demo connectors would need to
+simulate success), a bigger lift than F1/F3/F5. Once F2 lands, Phase F is
+fully complete and Phase G (Postgres datasource, deploy docs,
+observability, security pass, OPERATOR.md) is the only phase left entirely
+untouched.
+
+### 2026-08-27 — Session 5 continued (Phase F5: landing page copy fix)
+
+**Summary:** Picked **F5** next — Phase F3 just shipped and pushed, PR #6
+still open (draft, `mergeable_state: clean`), CI freshly triggered.
+Reviewed `apps/web/app/page.tsx` against the backlog's "no marketing
+rewrite" note: the page itself was already well-built, so this was a
+review pass for real gaps, not a redesign.
+
+**What shipped:** Found one concrete, genuine bug: the hero badge
+hardcoded `"Four networks, one command center"` and the sub-headline
+hand-listed `"Twitter, Threads, Bluesky, and Mastodon"` by name — both
+went silently stale when Instagram (Phase E5) brought the real platform
+count to five, since neither was derived from `PLATFORM_ORDER`. Same
+class of bug as E5's `DEMO_HANDLES` fix: a value duplicated by hand
+instead of computed from the single source of truth. Fixed both to
+derive from `PLATFORM_ORDER`/`PLATFORM_META` — a small number-word
+lookup (`NUMBER_WORDS`) for the badge, a comma-and-"and" `joinPlatformNames()`
+helper for the sentence — so a sixth platform addition can't leave this
+page's copy wrong again without a compile-time nudge to update it.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests, unaffected). Manual smoke test against a live
+dev server with a headless-browser screenshot: confirmed the badge now
+reads "Five networks, one command center" and the sub-headline lists all
+five platform names correctly, with no layout regression to the
+already-generic integrations grid below it.
+
+**Files touched:** `apps/web/app/page.tsx`, `docs/BACKLOG.md`,
+`docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open, commit, push. Phase F
+remaining: F1 (analytics — unblocked by live Bluesky/Mastodon connectors,
+needs scoping) and F2 (platform-mirrored bookmarks/likes — needs new
+connector-interface methods, bigger lift). Once those two land, Phase F
+is fully complete and Phase G (Postgres datasource, deploy docs,
+observability, security pass, OPERATOR.md) is the only phase left
+entirely untouched.
+
+### 2026-08-27 — Session 5 (Phase F3: error toasts)
+
+**Summary:** PR #6 still open and green. Picked **F3**, the top TODO item
+in Phase F now that Phase E is fully complete. Re-scoped it after actually
+reading the code rather than trusting the backlog note: two of the three
+named concerns — empty states (feed/connections/history all already had a
+dashed-border "no X yet" block) and optimistic UI with rollback
+(`PostCard`'s like/bookmark already updated state immediately and rolled
+back on a failed request) — were already implemented. A first grep for
+`toast\|rollback\|optimistic` came back empty and briefly suggested
+*nothing* existed yet; reading `PostCard.tsx` directly showed that grep
+had just missed a capitalized `// Optimistic update` comment. The real,
+confirmed gap was error toasts: five spots swallowed a failure completely
+silently (`.catch(() => {})`), leaving no way for a user to know a
+background load or an optimistic rollback had failed.
+
+**What shipped:** New `apps/web/lib/toast.tsx` — a dependency-free
+`ToastProvider`/`useToast()` React context, mirroring the existing
+`AuthProvider` shape. Stacked, auto-dismissing (5s) toasts in a
+fixed-position bottom container; `pointer-events-none` on the wrapper with
+`pointer-events-auto` per-toast so the empty space around them never
+blocks clicks. Mounted in `app/layout.tsx`, wrapping `AuthProvider`. Wired
+`useToast()` into the 5 silent-failure call sites: `PostCard.tsx`'s
+`toggleLike`/`toggleBookmark` rollback catches, and the initial background
+loads in `dashboard/page.tsx` (overview + history), `dashboard/connections
+/page.tsx`, and `dashboard/settings/page.tsx`. Left every failure that
+already had a form-adjacent inline `error` state alone (login, register,
+composer publish, connect-a-platform, change-password) — toasts are
+additive for failures with no natural inline home, not a replacement for
+existing inline error UI.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests unaffected; two pre-existing `react-hooks/
+exhaustive-deps` warnings on `connections/page.tsx` and `settings/
+page.tsx` are unrelated to this slice and predate it). Manual smoke test
+against two live dev servers: logged in as the demo account, loaded the
+unified feed, killed the API process mid-session (verified down via a
+failed `curl`, not just process-not-found in `ps`), clicked Like on a
+post, and confirmed via a headless-browser screenshot that the like
+state rolled back **and** a "Couldn't update like. Try again." toast
+rendered in the bottom-right corner. Cleaned up both dev servers and the
+scratch Playwright script afterward.
+
+**Files touched:** `apps/web/lib/toast.tsx` (new), `apps/web/app/
+layout.tsx`, `apps/web/components/PostCard.tsx`, `apps/web/app/dashboard/
+page.tsx`, `apps/web/app/dashboard/connections/page.tsx`, `apps/web/app/
+dashboard/settings/page.tsx`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open, commit this in reviewable
+slices (toast lib + layout wiring; the five call-site wirings; docs), push.
+Phase F remaining: F1 (analytics — now unblocked by live Bluesky/Mastodon
+connectors, needs scoping), F2 (platform-mirrored bookmarks/likes — needs
+new connector-interface methods, bigger lift), F5 (landing page polish).
+After Phase F, Phase G (Postgres datasource, deploy docs, observability,
+security pass, OPERATOR.md) is the only phase left entirely untouched.
+
+### 2026-08-27 — Session 4 continued (Phase E5: Instagram as a full demo platform)
+
+**Summary:** PR #6 still open and green. Picked **E5** — the last open
+item in Phase E. Re-scoped it after actually checking the codebase:
+Instagram didn't exist as a platform anywhere (config, demo connector,
+web types), unlike Threads which already had a demo card even though its
+live OAuth (C4) is still `WAITING-ON-HUMAN`. So this was "stand up a new
+platform, demo-only" rather than the one-line char-limit tweak the
+backlog note originally implied.
+
+**What shipped:** Added `instagram` to `apps/api/src/config.ts`'s
+`PLATFORMS` (2200 char limit, brand color, oauth-shaped like Threads),
+`apps/api/src/connectors/demo.ts`'s `AUTHORS`/`SNIPPETS` records,
+`apps/web/lib/types.ts`'s `PlatformId` union, and
+`apps/web/lib/platforms.tsx`'s `PLATFORM_META`/`PLATFORM_ORDER`/
+`ICON_PATHS` (real Instagram brand glyph). Confirmed first that every
+other consumer — the connect UI, feed platform filter, publish char-limit
+validation, demo image/avatar generation — is already generic over
+`PLATFORM_IDS`/`PLATFORM_ORDER`, so nothing else needed to change to get
+a fully working demo platform.
+
+**Found a real bug while smoke-testing:** `apps/api/src/seed.ts`'s
+`DEMO_HANDLES` lookup was typed `Record<string, string>` rather than
+`Record<PlatformId, string>`, so the missing `instagram` key wasn't a
+compile error — it was a runtime crash on `npm run db:setup`
+(`PrismaClientValidationError: Argument handle is missing`). Fixed both
+the immediate gap (added the entry) and the root cause (retyped to
+`Record<PlatformId, string>`, so this class of bug is now a build failure
+instead of a broken `db:setup` the next time a platform is added).
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests unaffected, since Instagram flows through
+entirely generic code paths). `npm run db:setup` failed once (the seed
+bug above), fixed, then succeeded cleanly (5 platform connections, 40
+feed posts). Manual smoke test against a live server with a real
+headless-browser walkthrough (not just types passing): screenshotted
+`/dashboard/connections` (Instagram card renders with the right icon,
+color, and connects successfully — "Your connections" shows 5) and
+`/dashboard/feed` (Instagram demo posts, including demo images, appear
+correctly in the unified timeline alongside the other four platforms).
+
+**Files touched:** `apps/api/src/config.ts`, `apps/api/src/connectors/demo.ts`,
+`apps/api/src/seed.ts`, `apps/web/lib/types.ts`, `apps/web/lib/platforms.tsx`,
+`docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None. Live Instagram OAuth (real Meta developer app) remains
+parked as `C4`, `WAITING-ON-HUMAN`, unaffected by this slice.
+
+**Next step:** Check PR #6 is still open, commit this in reviewable
+slices, push. Phase E is now fully complete (E1–E6 all `DONE`). Remaining
+open work is entirely Phase F: F1 (analytics — depends on live connectors
+existing, still mostly blocked), F2 (platform-mirrored bookmarks/likes),
+F3 (empty states/toasts — `PostCard` already has optimistic UI w/ rollback
+for like/bookmark, worth a scoping pass before assuming untouched), F5
+(landing page polish). After Phase F, Phase G (production hardening:
+Postgres datasource, deploy docs, observability, security pass, OPERATOR.md)
+is the only phase left untouched. Check the Parked/WAITING-ON-HUMAN
+section of `BACKLOG.md` for any new credentials before picking the next
+phase.
+
+### 2026-08-26 — Session 4 continued (Phase E4: per-target status UI polish)
+
+**Summary:** PR #6 (Phase E3) still open and green (CI + CodeQL both
+clean after the path-injection fix). Picked **E4** next — the highest-
+priority unblocked `TODO`.
+
+**What shipped:** Scoped E4 by reading the dashboard's publishing-history
+list (`apps/web/app/dashboard/page.tsx`) against what `GET /api/posts/history`
+already returns. Found a real bug: every target whose status wasn't
+`"success"` rendered as a red failed badge, including `"pending"` — a
+scheduled post not yet due showed as a false failure. Fixed with a new
+`.badge-pending` (amber) style and a three-way branch instead of a
+binary one. Also wired up two fields the API already returned but the UI
+silently dropped: a failed target's `error` message (previously
+invisible) and a successful target's `latencyMs` (mirrors the composer's
+own "Posted in Xs" wording). `job.scheduledAt` now shows next to the
+timestamp when set. No backend changes — `posts.ts` already returned
+everything needed.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests, unaffected since this was a web-only change).
+Manual smoke test against a live server with three genuine states (not
+just visual inspection): a real immediate success (published to Bluesky),
+a real scheduled-but-not-due post (Mastodon, correctly shows "Pending"),
+and a real failure — scheduled a post to Twitter, disconnected Twitter,
+then fired `/internal/tick` to force a genuine since-disconnected-platform
+failure with a real error message, confirmed via a headless-browser
+screenshot that all three states render correctly and honestly. One
+near-miss during cleanup: an ad-hoc Prisma `deleteMany` intended to clear
+smoke-test data was scoped to `email: { contains: "demo@nexus.app" } }` —
+which matches the permanent demo account itself, not just smoke-test
+leftovers. The command was interrupted by the sandbox before it ran
+(confirmed via a fresh `findUnique` immediately after), but the close
+call is worth recording: any future cleanup should reseed via
+`npm run db:setup` (which fully overwrites to a known-good state) rather
+than hand-scoping deletes against real fixture data. Reseeded and
+confirmed the demo account and all 4 connections are intact.
+
+**Files touched:** `apps/web/app/dashboard/page.tsx`,
+`apps/web/app/globals.css`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open (it should be — this continues
+the same slice), commit this in reviewable slices, push. After E4:
+E5 (Instagram char-limit preview — needs standing up Instagram as a
+platform from scratch) and the rest of Phase F (F1 analytics, F2
+platform-mirrored bookmarks/likes, F3 empty-states/toasts — `PostCard`
+already has optimistic UI w/ rollback for like/bookmark, worth a scoping
+pass before assuming untouched, F5 landing page polish) remain. Check the
+Parked/WAITING-ON-HUMAN section of `BACKLOG.md` for any new credentials
+before picking the next phase.
+
+### 2026-08-26 — Session 4 (Phase E3: media upload pipeline)
+
+**Summary:** PR #5 (Phase C2, carrying forward every phase through F6) was
+merged by a human. Per this repo's "a merged PR is finished" convention,
+restarted `claude/nexus-production-build-s6p5hz` from the current default
+branch (`autonomous-agent-setup-6249396920522474145`) — a plain
+`git merge --ff-only` was safe since the branch's prior head was already
+fully contained in the new base (nothing unmerged to carry forward), and
+pushed the restarted branch. Picked **E3** (media upload pipeline) next —
+the highest-priority unblocked `TODO` in Phase E.
+
+**What shipped:** New `MediaStorage` interface (`apps/api/src/lib/mediaStorage.ts`)
+with a `LocalDiskStorage` default — same "ship a fully-working default,
+gate the real backend behind env" split this campaign already used for
+`EmailProvider`/`ConsoleEmailProvider` (Phase B2), since no S3-compatible
+bucket or credentials exist yet (parked `WAITING-ON-HUMAN` as `E3a`).
+`POST /api/media/upload` (new `apps/api/src/routes/media.ts`, authenticated,
+rate-limited 20/min via `@fastify/multipart`): accepts one image
+(jpeg/png/gif/webp), 10MB max, stores it under a random UUID-based
+filename — never the client-supplied name — and returns `{ url, key }`
+directly usable in `POST /api/posts`'s existing `mediaUrls` field.
+`GET /uploads/:key` serves it back; the key must match a strict
+`UUID.ext` pattern before ever touching disk, which rules out path
+traversal by construction rather than by sanitizing client input. Web:
+`Composer` gained an "add photo" control (up to 4 images, matching the
+existing `mediaUrls` cap), sequential uploads (keeps order == selection
+order, avoids bursting the rate limit on a multi-file drop), thumbnail
+previews with per-image remove, "Post" disabled mid-upload.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 tests, +6 new in `media.test.ts`: auth required, a real
+PNG round-trips byte-for-byte through upload → serve, rejects a
+disallowed MIME type, rejects a real 11MB file — genuinely oversized, not
+a mocked check — rejects a request with no file field, and the serving
+route 404s a well-formed-but-missing key vs. 400s a malformed one).
+Manual end-to-end smoke test against a live server: logged in as
+`demo@nexus.app`, uploaded a real PNG via `curl`, confirmed the served
+file was byte-identical to the original (`cmp`), then published a post
+carrying that media URL and confirmed it published successfully — all
+with zero third-party credentials. Cleaned up the local `uploads/`
+directory afterward (gitignored either way).
+
+**Files touched:** `apps/api/src/lib/mediaStorage.ts` (new),
+`apps/api/src/routes/media.ts` (new), `apps/api/src/__tests__/media.test.ts`
+(new), `apps/api/src/app.ts`, `apps/api/package.json`,
+`apps/web/components/Composer.tsx`, `apps/web/lib/api.ts`, `.gitignore`,
+`docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None for the local-disk path. `E3a` (S3-compatible storage)
+parked `WAITING-ON-HUMAN` — needs a real bucket + credentials; the swap-in
+point is documented in `BACKLOG.md`.
+
+**Next step:** Check for an open PR on this restarted branch (none should
+exist yet — open a new draft PR and subscribe to its activity). After
+that, remaining open items: E4 (per-target status UI polish — API already
+returns it), E5 (Instagram char-limit preview — needs standing up
+Instagram as a platform from scratch), and Phase F (F1 analytics, F2
+platform-mirrored bookmarks/likes, F3 empty-states/toasts — `PostCard`
+already has optimistic UI w/ rollback for like/bookmark, worth a scoping
+pass before assuming untouched, F5 landing page polish). Check the
+Parked/WAITING-ON-HUMAN section of `BACKLOG.md` for any new credentials
+before picking the next phase.
+
 ### 2026-08-26 — Session 3 continued a tenth time (Phase F6: Playwright smoke test + CI wiring; F4 backlog correction)
 
 **Summary:** Checked PR #5's CI on the E6 push before continuing — green.

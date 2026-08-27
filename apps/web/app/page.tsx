@@ -1,6 +1,28 @@
 import Link from "next/link";
 import { PLATFORM_META, PLATFORM_ORDER, PlatformGlyph } from "@/lib/platforms";
 
+const NUMBER_WORDS: Record<number, string> = {
+  1: "One",
+  2: "Two",
+  3: "Three",
+  4: "Four",
+  5: "Five",
+  6: "Six",
+  7: "Seven",
+  8: "Eight",
+};
+
+// Comma-and-"and" join of every supported platform's display name — kept
+// derived from PLATFORM_ORDER (not hand-listed) so adding a platform can't
+// leave this copy silently undercounting again, as it did after Instagram
+// (Phase E5) landed and this line still said "Twitter, Threads, Bluesky,
+// and Mastodon."
+function joinPlatformNames(): string {
+  const names = PLATFORM_ORDER.map((p) => PLATFORM_META[p].name);
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
 const FEATURES = [
   {
     title: "Unified Feed",
@@ -90,7 +112,7 @@ export default function Home() {
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
             </span>
-            Four networks, one command center
+            {NUMBER_WORDS[PLATFORM_ORDER.length] ?? PLATFORM_ORDER.length} networks, one command center
           </span>
         </div>
 
@@ -101,8 +123,8 @@ export default function Home() {
         </h1>
 
         <p className="animate-fade-up mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-600" style={{ animationDelay: "180ms" }}>
-          Connect Twitter, Threads, Bluesky, and Mastodon. Read a single unified timeline, engage
-          with everything in one place, and cross-post to every network at once.
+          Connect {joinPlatformNames()}. Read a single unified timeline, engage with everything in
+          one place, and cross-post to every network at once.
         </p>
 
         <div className="animate-fade-up mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row" style={{ animationDelay: "240ms" }}>

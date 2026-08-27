@@ -1,4 +1,5 @@
 import type {
+  AnalyticsData,
   Connection,
   DashboardData,
   FeedPost,
@@ -64,6 +65,38 @@ function tryRefresh(): Promise<boolean> {
       });
   }
   return refreshPromise;
+}
+
+// Media upload (Phase E3) can't go through request(): it sends a File via
+// FormData, not a JSON body, so it must skip the JSON content-type header
+// (the browser sets multipart's own boundary-bearing one) while still
+// sharing request()'s auth-token attachment and single-retry-on-401 logic.
+async function uploadMedia(file: File, isRetry = false): Promise<{ url: string; key: string }> {
+  const token = getToken();
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(`${API_URL}/api/media/upload`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "include",
+    body: formData,
+  });
+
+  if (res.status === 401 && !isRetry) {
+    const refreshed = await tryRefresh();
+    if (refreshed) return uploadMedia(file, true);
+    clearToken();
+  }
+
+  const isJson = res.headers.get("content-type")?.includes("application/json");
+  const body = isJson ? await res.json() : null;
+
+  if (!res.ok) {
+    const message = (body && (body.error || body.message)) || `Upload failed (${res.status})`;
+    throw new ApiError(message, res.status);
+  }
+  return body as { url: string; key: string };
 }
 
 async function request<T>(path: string, options: RequestInit = {}, isRetry = false): Promise<T> {
@@ -174,6 +207,8 @@ export const api = {
   bookmark: (id: string) =>
     request<{ post: FeedPost }>(`/api/feed/${id}/bookmark`, { method: "POST" }),
 
+  uploadMedia: (file: File) => uploadMedia(file),
+
   publish: (content: string, platforms: string[], mediaUrls: string[] = [], idempotencyKey?: string) =>
     request<{ jobId: string; results: PublishTargetResult[] }>("/api/posts", {
       method: "POST",
@@ -183,4 +218,6 @@ export const api = {
   history: () => request<{ jobs: PublishHistoryItem[] }>("/api/posts/history"),
 
   dashboard: () => request<DashboardData>("/api/dashboard"),
+
+  analytics: () => request<AnalyticsData>("/api/analytics"),
 };

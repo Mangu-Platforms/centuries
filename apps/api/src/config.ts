@@ -35,6 +35,7 @@ export const PLATFORMS = {
   threads: { id: "threads", name: "Threads", charLimit: 500, color: "#000000", auth: "oauth" },
   bluesky: { id: "bluesky", name: "Bluesky", charLimit: 300, color: "#0085ff", auth: "app_password" },
   mastodon: { id: "mastodon", name: "Mastodon", charLimit: 500, color: "#6364ff", auth: "oauth" },
+  instagram: { id: "instagram", name: "Instagram", charLimit: 2200, color: "#E4405F", auth: "oauth" },
 } as const;
 
 export type PlatformId = keyof typeof PLATFORMS;

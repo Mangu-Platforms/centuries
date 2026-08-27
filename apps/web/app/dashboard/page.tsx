@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import type { DashboardData, PublishHistoryItem } from "@/lib/types";
 import { PLATFORM_META, PlatformGlyph } from "@/lib/platforms";
+import { useToast } from "@/lib/toast";
 
 const STAT_STYLES: Record<string, { iconBg: string; icon: React.ReactNode }> = {
   platforms: {
@@ -59,10 +60,12 @@ function Stat({ label, value, kind }: { label: string; value: string | number; k
 export default function DashboardOverview() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
+  const { showToast } = useToast();
 
   useEffect(() => {
-    api.dashboard().then(setData).catch(() => {});
-    api.history().then((r) => setHistory(r.jobs)).catch(() => {});
+    api.dashboard().then(setData).catch(() => showToast("Couldn't load your overview. Try refreshing."));
+    api.history().then((r) => setHistory(r.jobs)).catch(() => showToast("Couldn't load publish history."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!data) return <p className="text-slate-400">Loading overview…</p>;
@@ -161,11 +164,29 @@ export default function DashboardOverview() {
                 <p className="text-sm leading-relaxed text-slate-800 dark:text-slate-200">{job.content}</p>
                 <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                   <span className="text-slate-400">{new Date(job.createdAt).toLocaleString()}</span>
+                  {job.scheduledAt && (
+                    <>
+                      <span className="text-slate-300 dark:text-slate-600">·</span>
+                      <span className="text-slate-400">
+                        Scheduled for {new Date(job.scheduledAt).toLocaleString()}
+                      </span>
+                    </>
+                  )}
                   <span className="text-slate-300 dark:text-slate-600">·</span>
                   {job.targets.map((t) => (
-                    <span key={t.platform} className={t.status === "success" ? "badge-success" : "badge-danger"}>
+                    <span
+                      key={t.platform}
+                      className={
+                        t.status === "success" ? "badge-success" : t.status === "pending" ? "badge-pending" : "badge-danger"
+                      }
+                    >
                       <PlatformGlyph platform={t.platform} className="h-3.5 w-3.5" />
-                      {PLATFORM_META[t.platform].name} {t.status === "success" ? "✓" : "✕"}
+                      {PLATFORM_META[t.platform].name}{" "}
+                      {t.status === "success"
+                        ? `✓ ${(t.latencyMs / 1000).toFixed(1)}s`
+                        : t.status === "pending"
+                          ? "· Pending"
+                          : `✕ ${t.error || "Failed"}`}
                     </span>
                   ))}
                 </div>

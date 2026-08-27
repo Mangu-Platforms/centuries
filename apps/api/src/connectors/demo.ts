@@ -31,6 +31,11 @@ const AUTHORS: Record<PlatformId, Array<{ handle: string; name: string }>> = {
     { handle: "@fedithoughts@fosstodon.org", name: "Fedi Thoughts" },
     { handle: "@opensource@mastodon.social", name: "Open Source Daily" },
   ],
+  instagram: [
+    { handle: "@natgeo", name: "National Geographic" },
+    { handle: "@studio.notes", name: "Studio Notes" },
+    { handle: "@dailyui.inspo", name: "Daily UI Inspo" },
+  ],
 };
 
 const SNIPPETS: Record<PlatformId, string[]> = {
@@ -54,6 +59,11 @@ const SNIPPETS: Record<PlatformId, string[]> = {
     "No algorithm, no ads, just my timeline. #fediverse",
     "ActivityPub federation means your followers come with you.",
     "Self-hosting your instance is more approachable than ever.",
+  ],
+  instagram: [
+    "New collection dropping this weekend ✨ swipe for the full look.",
+    "Behind the scenes from today's shoot 📸",
+    "2,200 characters and I still can't say everything I want to. #grateful",
   ],
 };
 

@@ -1,4 +1,4 @@
-export type PlatformId = "twitter" | "threads" | "bluesky" | "mastodon";
+export type PlatformId = "twitter" | "threads" | "bluesky" | "mastodon" | "instagram";
 
 export interface User {
   id: string;
@@ -68,6 +68,20 @@ export interface PublishHistoryItem {
   scheduledAt: string | null;
   createdAt: string;
   targets: Array<{ platform: PlatformId; status: string; latencyMs: number; error: string }>;
+}
+
+export interface AnalyticsData {
+  perPlatform: Array<{
+    platform: PlatformId;
+    name: string;
+    color: string;
+    attempts: number;
+    successCount: number;
+    failedCount: number;
+    successRate: number;
+    avgLatencyMs: number;
+  }>;
+  feedVolume: Array<{ date: string; count: number }>;
 }
 
 export interface DashboardData {

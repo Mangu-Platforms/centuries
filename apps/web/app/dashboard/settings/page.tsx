@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useToast } from "@/lib/toast";
 import type { SessionInfo } from "@/lib/types";
 
 export default function SettingsPage() {
@@ -37,8 +38,10 @@ function SettingsPageInner() {
   const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [changingPassword, setChangingPassword] = useState(false);
+  const { showToast } = useToast();
 
-  const loadSessions = () => api.sessions().then((r) => setSessions(r.sessions)).catch(() => {});
+  const loadSessions = () =>
+    api.sessions().then((r) => setSessions(r.sessions)).catch(() => showToast("Couldn't load your active sessions."));
   useEffect(() => {
     loadSessions();
   }, []);
