@@ -102,7 +102,12 @@ async function uploadMedia(file: File, isRetry = false): Promise<{ url: string; 
 async function request<T>(path: string, options: RequestInit = {}, isRetry = false): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    // Only claim a JSON body when there actually is one: Fastify rejects a
+    // body-less POST that carries Content-Type: application/json with
+    // FST_ERR_CTP_EMPTY_JSON_BODY (400) — which silently broke every
+    // body-less POST here (like, bookmark, logout, logout-all, resend
+    // verification) until E7's retry endpoint surfaced it.
+    ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -220,6 +225,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content, platforms, mediaUrls, idempotencyKey }),
     }),
+
+  retryPost: (jobId: string) =>
+    request<{ jobId: string; retried: number; results: PublishTargetResult[] }>(
+      `/api/posts/${jobId}/retry`,
+      { method: "POST" },
+    ),
 
   history: () => request<{ jobs: PublishHistoryItem[] }>("/api/posts/history"),
 

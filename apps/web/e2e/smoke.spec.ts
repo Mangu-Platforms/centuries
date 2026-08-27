@@ -35,6 +35,22 @@ test("golden path: register, connect, feed, compose, history", async ({ page }) 
     await expect(page.locator("article").first()).toBeVisible({ timeout: 10_000 });
   });
 
+  await test.step("like a post and have it stick", async () => {
+    // Regression guard for the body-less-POST bug: the web client used to
+    // send Content-Type: application/json with an empty body on
+    // like/bookmark/logout, which Fastify 400s — the optimistic like then
+    // silently rolled back (and, post-F3, raised an error toast). A real
+    // like click must persist, not revert.
+    const firstArticle = page.locator("article").first();
+    const likeButton = firstArticle.getByRole("button", { name: /like/i }).first();
+    await likeButton.click();
+    await expect(page.getByText(/Couldn't update like/)).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator("article").first().getByRole("button", { name: /unlike/i })).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
   await test.step("compose and publish a post", async () => {
     await page.goto("/dashboard");
     await page.getByRole("button", { name: "New post" }).click();

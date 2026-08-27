@@ -23,8 +23,10 @@ export function Composer({
   const [content, setContent] = useState("");
   const [selected, setSelected] = useState<PlatformId[]>(connectedPlatforms);
   const [results, setResults] = useState<PublishTargetResult[] | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -81,8 +83,9 @@ export function Composer({
     if (selected.length === 0) return setError("Select at least one platform.");
     setSubmitting(true);
     try {
-      const { results } = await api.publish(content.trim(), selected, mediaUrls, idempotencyKey);
-      setResults(results);
+      const res = await api.publish(content.trim(), selected, mediaUrls, idempotencyKey);
+      setJobId(res.jobId);
+      setResults(res.results);
       onPublished?.();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to publish");
@@ -116,7 +119,9 @@ export function Composer({
                 className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
                   r.status === "success"
                     ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-900 dark:bg-emerald-900/10"
-                    : "border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-900/10"
+                    : r.status === "pending"
+                      ? "border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-900/10"
+                      : "border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-900/10"
                 }`}
               >
                 <span className="flex items-center gap-2.5 font-medium text-slate-800 dark:text-slate-200">
@@ -125,12 +130,34 @@ export function Composer({
                 </span>
                 {r.status === "success" ? (
                   <span className="badge-success">✓ Posted in {(r.latencyMs / 1000).toFixed(1)}s</span>
+                ) : r.status === "pending" ? (
+                  <span className="badge-pending">Scheduled</span>
                 ) : (
                   <span className="badge-danger">✕ {r.error || "Failed"}</span>
                 )}
               </div>
             ))}
+            {error && <p className="text-sm font-medium text-rose-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
+              {jobId && results.some((r) => r.status === "failed") && (
+                <button
+                  onClick={async () => {
+                    setRetrying(true);
+                    try {
+                      const res = await api.retryPost(jobId);
+                      setResults(res.results);
+                    } catch (e) {
+                      setError(e instanceof ApiError ? e.message : "Retry failed");
+                    } finally {
+                      setRetrying(false);
+                    }
+                  }}
+                  disabled={retrying}
+                  className="btn-outline"
+                >
+                  {retrying ? "Retrying…" : "Retry failed targets"}
+                </button>
+              )}
               <button onClick={onClose} className="btn-primary">
                 Done
               </button>

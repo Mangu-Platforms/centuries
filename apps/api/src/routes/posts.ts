@@ -136,6 +136,73 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ jobId: job.id, results });
   });
 
+  // Phase E7: re-attempt ONLY a job's failed targets. Partial failure is
+  // already reported per target (CP03); this turns it into one-tap
+  // recovery. Race-safe by an atomic claim: each failed target is flipped
+  // failed→pending via a guarded updateMany, so of two concurrent retries
+  // only one actually re-publishes any given target (the loser's claim
+  // matches zero rows). Rate-limited: every claim triggers an outbound
+  // publish attempt.
+  app.post(
+    "/api/posts/:id/retry",
+    { preHandler: [app.rateLimit({ max: 10, timeWindow: "1 minute" }), app.authenticate] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = await prisma.publishJob.findFirst({
+        where: { id, userId: request.user.sub },
+        include: { targets: true },
+      });
+      if (!job) return reply.code(404).send({ error: "Post not found" });
+
+      const failedTargets = job.targets.filter((t) => t.status === "failed");
+      const mediaUrls = JSON.parse(job.mediaUrls) as string[];
+
+      const platforms = failedTargets.map((t) => t.platform as PlatformId);
+      const connections = platforms.length
+        ? await prisma.connection.findMany({
+            where: { userId: request.user.sub, platform: { in: platforms } },
+          })
+        : [];
+      const byPlatform = new Map(connections.map((c) => [c.platform, c]));
+
+      let retried = 0;
+      for (const target of failedTargets) {
+        const platform = target.platform as PlatformId;
+        const connection = byPlatform.get(platform);
+        if (!connection) {
+          await prisma.publishTarget.updateMany({
+            where: { id: target.id, status: "failed" },
+            data: { error: `No ${platform} connection found at retry time` },
+          });
+          continue;
+        }
+
+        // The atomic claim: only the request that wins this update may
+        // re-publish this target. (If the process died between claim and
+        // attempt, the target would show as "pending" until a further
+        // manual retry — visible, not silent, and never double-posted.)
+        const claim = await prisma.publishTarget.updateMany({
+          where: { id: target.id, status: "failed" },
+          data: { status: "pending", error: "" },
+        });
+        if (claim.count === 0) continue;
+
+        retried++;
+        await attemptPublish({
+          targetId: target.id,
+          userId: request.user.sub,
+          connection,
+          platform,
+          content: job.content,
+          mediaUrls,
+        });
+      }
+
+      const { results } = await jobResponse(job.id);
+      return reply.send({ jobId: job.id, retried, results });
+    },
+  );
+
   // Publishing history (BRD DS03).
   app.get("/api/posts/history", { preHandler: [app.authenticate] }, async (request) => {
     const jobs = await prisma.publishJob.findMany({

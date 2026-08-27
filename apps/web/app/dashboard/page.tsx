@@ -60,7 +60,43 @@ function Stat({ label, value, kind }: { label: string; value: string | number; k
 export default function DashboardOverview() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const { showToast } = useToast();
+
+  // Phase E7: one-tap recovery for a partially failed cross-post — retries
+  // only the failed targets, then patches that job's row in place.
+  const retryJob = async (jobId: string) => {
+    if (retryingJobId) return;
+    setRetryingJobId(jobId);
+    try {
+      const res = await api.retryPost(jobId);
+      setHistory((jobs) =>
+        jobs.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                targets: res.results.map((r) => ({
+                  platform: r.platform,
+                  status: r.status,
+                  latencyMs: r.latencyMs,
+                  error: r.error,
+                })),
+              }
+            : j,
+        ),
+      );
+      const stillFailed = res.results.filter((r) => r.status === "failed").length;
+      showToast(
+        stillFailed === 0
+          ? "Retry succeeded — all targets published."
+          : `Retried, but ${stillFailed} target${stillFailed === 1 ? "" : "s"} still failed.`,
+      );
+    } catch {
+      showToast("Couldn't retry. Try again.");
+    } finally {
+      setRetryingJobId(null);
+    }
+  };
 
   useEffect(() => {
     api.dashboard().then(setData).catch(() => showToast("Couldn't load your overview. Try refreshing."));
@@ -189,6 +225,17 @@ export default function DashboardOverview() {
                           : `✕ ${t.error || "Failed"}`}
                     </span>
                   ))}
+                  {job.targets.some((t) => t.status === "failed") && (
+                    <button
+                      onClick={() => retryJob(job.id)}
+                      aria-disabled={retryingJobId === job.id}
+                      className={`btn-ghost px-2 py-1 text-xs font-semibold text-brand-600 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-900/30 ${
+                        retryingJobId === job.id ? "cursor-not-allowed opacity-50" : ""
+                      }`}
+                    >
+                      {retryingJobId === job.id ? "Retrying…" : "Retry failed"}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

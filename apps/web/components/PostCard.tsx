@@ -177,7 +177,8 @@ export function PostCard({ post }: { post: FeedPost }) {
               className={`group flex items-center gap-1.5 rounded-full px-2.5 py-1.5 transition hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-500/10 ${
                 state.liked ? "text-rose-500" : ""
               }`}
-              aria-label="Like"
+              aria-label={state.liked ? "Unlike" : "Like"}
+              aria-pressed={state.liked}
             >
               <HeartIcon filled={state.liked} />
               <span className="tabular-nums">{state.likeCount.toLocaleString()}</span>
@@ -195,7 +196,8 @@ export function PostCard({ post }: { post: FeedPost }) {
               className={`ml-auto rounded-full p-1.5 transition hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-brand-500/10 ${
                 state.bookmarked ? "text-brand-600" : ""
               }`}
-              aria-label="Bookmark"
+              aria-label={state.bookmarked ? "Remove bookmark" : "Bookmark"}
+              aria-pressed={state.bookmarked}
             >
               <BookmarkIcon filled={state.bookmarked} />
             </button>
