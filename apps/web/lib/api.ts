@@ -178,10 +178,16 @@ export const api = {
   connections: () => request<{ connections: Connection[] }>("/api/connections"),
 
   connect: (platform: string, handle: string, instance?: string, credential?: string) =>
-    request<{ connection: Connection; importedPosts: number }>("/api/connections", {
+    request<{ connection: Connection; importedPosts: number; warning?: string }>("/api/connections", {
       method: "POST",
       body: JSON.stringify({ platform, handle, instance, credential }),
     }),
+
+  reconnect: (id: string, credential?: string) =>
+    request<{ connection: Connection; importedPosts: number; warning?: string }>(
+      `/api/connections/${id}/reconnect`,
+      { method: "POST", body: JSON.stringify(credential ? { credential } : {}) },
+    ),
 
   disconnect: (id: string) =>
     request<{ ok: boolean }>(`/api/connections/${id}`, { method: "DELETE" }),

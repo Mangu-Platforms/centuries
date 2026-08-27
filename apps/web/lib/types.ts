@@ -34,6 +34,10 @@ export interface Connection {
   instance: string;
   status: "active" | "expired" | "error";
   createdAt: string;
+  /** Last successful timeline fetch (initial import or periodic sync); null before the first one. */
+  lastSyncedAt: string | null;
+  /** Most recent fetch failure message; empty string when the last fetch succeeded. */
+  lastError: string;
 }
 
 export interface FeedPost {
