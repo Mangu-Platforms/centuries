@@ -216,6 +216,91 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Phase E8: manage a scheduled post before it fires. Both routes require
+  // (a) every target still "pending" AND (b) a strictly future scheduledAt.
+  // (b) is what makes this race-free without locks: the tick worker only
+  // ever claims targets of jobs whose scheduledAt is in the past, so a
+  // future-scheduled job cannot be mid-publish while we cancel or edit it.
+  // Anything already attempted (or already due) is ledger, not editable.
+  app.delete("/api/posts/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const job = await prisma.publishJob.findFirst({
+      where: { id, userId: request.user.sub },
+      include: { targets: true },
+    });
+    if (!job) return reply.code(404).send({ error: "Post not found" });
+
+    const editable =
+      job.targets.every((t) => t.status === "pending") &&
+      job.scheduledAt !== null &&
+      job.scheduledAt.getTime() > Date.now();
+    if (!editable) {
+      return reply.code(409).send({ error: "Only a not-yet-due scheduled post can be canceled" });
+    }
+
+    await prisma.publishJob.delete({ where: { id: job.id } }); // targets cascade
+    return reply.send({ ok: true });
+  });
+
+  const editSchema = z.object({
+    content: z.string().min(1).max(5000).optional(),
+    scheduledAt: z.string().datetime().optional(),
+  });
+
+  app.patch("/api/posts/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = editSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0].message });
+
+    const job = await prisma.publishJob.findFirst({
+      where: { id, userId: request.user.sub },
+      include: { targets: true },
+    });
+    if (!job) return reply.code(404).send({ error: "Post not found" });
+
+    const editable =
+      job.targets.every((t) => t.status === "pending") &&
+      job.scheduledAt !== null &&
+      job.scheduledAt.getTime() > Date.now();
+    if (!editable) {
+      return reply.code(409).send({ error: "Only a not-yet-due scheduled post can be edited" });
+    }
+
+    const content = parsed.data.content ?? job.content;
+    // Re-validate limits against the job's own targets (CP02 holds on edit
+    // exactly as it does on create).
+    const platforms = job.targets.map((t) => t.platform).filter(isPlatform);
+    const tooLong = platforms.find((p) => content.length > PLATFORMS[p].charLimit);
+    if (tooLong) {
+      return reply.code(400).send({
+        error: `Content exceeds the ${PLATFORMS[tooLong].name} limit of ${PLATFORMS[tooLong].charLimit} characters`,
+      });
+    }
+
+    let scheduledAt = job.scheduledAt;
+    if (parsed.data.scheduledAt) {
+      const next = new Date(parsed.data.scheduledAt);
+      if (next.getTime() <= Date.now()) {
+        return reply.code(400).send({ error: "The new send time must be in the future" });
+      }
+      scheduledAt = next;
+    }
+
+    const updated = await prisma.publishJob.update({
+      where: { id: job.id },
+      data: { content, scheduledAt },
+    });
+    return reply.send({
+      job: {
+        id: updated.id,
+        content: updated.content,
+        scheduledAt: updated.scheduledAt,
+        mediaUrls: JSON.parse(updated.mediaUrls) as string[],
+        createdAt: updated.createdAt,
+      },
+    });
+  });
+
   // Publishing history (BRD DS03).
   app.get("/api/posts/history", { preHandler: [app.authenticate] }, async (request) => {
     const jobs = await prisma.publishJob.findMany({

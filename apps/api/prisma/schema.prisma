@@ -173,7 +173,7 @@ model PublishTarget {
   id         String   @id @default(cuid())
   jobId      String
   platform   String
-  status     String   @default("pending") // pending | success | failed
+  status     String   @default("pending") // pending | publishing (transient claim) | success | failed
   externalId String   @default("")
   error      String   @default("")
   latencyMs  Int      @default(0)

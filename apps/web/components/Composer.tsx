@@ -7,6 +7,12 @@ import { PLATFORM_META, PLATFORM_ORDER, PlatformGlyph, PlatformIcon } from "@/li
 
 const MAX_MEDIA = 4; // matches POST /api/posts's mediaUrls.max(4)
 
+/** Formats a Date as a datetime-local input value (local timezone, minute precision). */
+export function localDateTimeValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function Composer({
   connections,
   onClose,
@@ -29,6 +35,13 @@ export function Composer({
   const [retrying, setRetrying] = useState(false);
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
+  // Phase E8: optional scheduling. `scheduledAt` holds the raw
+  // datetime-local input value (user's local timezone); converted to ISO
+  // only at submit time.
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [scheduledJobId, setScheduledJobId] = useState<string | null>(null);
+  const [undoing, setUndoing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Generated once per mount — this component fully unmounts when the
   // composer closes (see dashboard/layout.tsx's `{composerOpen && ...}`),
@@ -36,7 +49,7 @@ export function Composer({
   // retry within the same open session (a double-click, clicking "Post"
   // again after a dropped response) reuses this one. The API returns the
   // original result for a repeated key instead of publishing again.
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const minLimit = selected.length
     ? Math.min(...selected.map((p) => PLATFORM_META[p].charLimit))
@@ -83,8 +96,11 @@ export function Composer({
     if (selected.length === 0) return setError("Select at least one platform.");
     setSubmitting(true);
     try {
-      const res = await api.publish(content.trim(), selected, mediaUrls, idempotencyKey);
+      const scheduledIso =
+        scheduling && scheduledAt ? new Date(scheduledAt).toISOString() : undefined;
+      const res = await api.publish(content.trim(), selected, mediaUrls, idempotencyKey, scheduledIso);
       setJobId(res.jobId);
+      setScheduledJobId(scheduledIso ? res.jobId : null);
       setResults(res.results);
       onPublished?.();
     } catch (e) {
@@ -139,6 +155,34 @@ export function Composer({
                 )}
               </div>
             ))}
+            {scheduledJobId && scheduledAt && (
+              <div className="flex items-center justify-between rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300">
+                <span>Scheduled for {new Date(scheduledAt).toLocaleString()}.</span>
+                <button
+                  onClick={async () => {
+                    setUndoing(true);
+                    try {
+                      await api.cancelPost(scheduledJobId);
+                      // Back to the form with the draft intact so the user
+                      // can adjust; a fresh idempotency key because the next
+                      // submit is a genuinely new job.
+                      setScheduledJobId(null);
+                      setJobId(null);
+                      setResults(null);
+                      setIdempotencyKey(crypto.randomUUID());
+                    } catch (e) {
+                      setError(e instanceof ApiError ? e.message : "Couldn't cancel the scheduled post");
+                    } finally {
+                      setUndoing(false);
+                    }
+                  }}
+                  disabled={undoing}
+                  className="font-semibold underline underline-offset-2 hover:text-amber-900 disabled:opacity-50 dark:hover:text-amber-200"
+                >
+                  {undoing ? "Undoing…" : "Undo"}
+                </button>
+              </div>
+            )}
             {error && <p className="text-sm font-medium text-rose-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
               {jobId && results.some((r) => r.status === "failed") && (
@@ -272,15 +316,53 @@ export function Composer({
               {error && <span className="font-medium text-rose-600">{error}</span>}
             </div>
 
-            <div className="mt-5 flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-              <button onClick={onClose} className="btn-outline">
-                Cancel
-              </button>
-              <button onClick={submit} disabled={submitting || uploading || overLimit} className="btn-primary">
-                {submitting
-                  ? "Posting…"
-                  : `Post to ${selected.length} platform${selected.length === 1 ? "" : "s"}`}
-              </button>
+            <div className="mt-5 space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800">
+              {scheduling && (
+                <div>
+                  <label className="label" htmlFor="composer-schedule-at">
+                    Send at
+                  </label>
+                  <input
+                    id="composer-schedule-at"
+                    type="datetime-local"
+                    className="input"
+                    value={scheduledAt}
+                    min={localDateTimeValue(new Date(Date.now() + 60_000))}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                  />
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    Times are in your local timezone. The post fires within a minute of this time.
+                  </p>
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => {
+                    setScheduling((s) => !s);
+                    if (scheduling) setScheduledAt("");
+                  }}
+                  className="btn-outline mr-auto"
+                  aria-pressed={scheduling}
+                >
+                  {scheduling ? "Send now instead" : "Schedule"}
+                </button>
+                <button onClick={onClose} className="btn-outline">
+                  Cancel
+                </button>
+                <button
+                  onClick={submit}
+                  disabled={submitting || uploading || overLimit || (scheduling && !scheduledAt)}
+                  className="btn-primary"
+                >
+                  {submitting
+                    ? scheduling
+                      ? "Scheduling…"
+                      : "Posting…"
+                    : scheduling
+                      ? "Schedule post"
+                      : `Post to ${selected.length} platform${selected.length === 1 ? "" : "s"}`}
+                </button>
+              </div>
             </div>
           </>
         )}

@@ -220,11 +220,26 @@ export const api = {
 
   uploadMedia: (file: File) => uploadMedia(file),
 
-  publish: (content: string, platforms: string[], mediaUrls: string[] = [], idempotencyKey?: string) =>
+  publish: (
+    content: string,
+    platforms: string[],
+    mediaUrls: string[] = [],
+    idempotencyKey?: string,
+    scheduledAt?: string,
+  ) =>
     request<{ jobId: string; results: PublishTargetResult[] }>("/api/posts", {
       method: "POST",
-      body: JSON.stringify({ content, platforms, mediaUrls, idempotencyKey }),
+      body: JSON.stringify({ content, platforms, mediaUrls, idempotencyKey, scheduledAt }),
     }),
+
+  cancelPost: (jobId: string) =>
+    request<{ ok: boolean }>(`/api/posts/${jobId}`, { method: "DELETE" }),
+
+  editPost: (jobId: string, data: { content?: string; scheduledAt?: string }) =>
+    request<{ job: { id: string; content: string; scheduledAt: string | null } }>(
+      `/api/posts/${jobId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    ),
 
   retryPost: (jobId: string) =>
     request<{ jobId: string; retried: number; results: PublishTargetResult[] }>(
