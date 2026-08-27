@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { config, PLATFORMS } from "./config.js";
 import { prisma } from "./db.js";
@@ -45,6 +46,13 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
+  // Phase G4: baseline security headers (CSP, X-Content-Type-Options,
+  // X-Frame-Options, etc). crossOriginResourcePolicy is overridden from
+  // helmet's "same-origin" default to "cross-origin" -- GET /uploads/:key
+  // (routes/media.ts) is deliberately fetched cross-origin, directly as
+  // <img src>, by the separately-hosted web app; "same-origin" would have
+  // browsers silently refuse to load every uploaded image.
+  await app.register(helmet, { crossOriginResourcePolicy: { policy: "cross-origin" } });
   // No `secret` option: the refresh token cookie's value is itself a
   // high-entropy opaque random token (see lib/refreshTokens.ts), so it
   // doesn't need an additional signature — unlike a cookie that stored
