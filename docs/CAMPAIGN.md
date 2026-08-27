@@ -46,6 +46,46 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7, part 1 (strategy-pack backlog reconciliation)
+
+**Context on arrival:** fresh container; branch
+`claude/nexus-1242-autonomous-build-vo8ecx` exists locally at exactly the
+default branch's tip (`d7c2e92`, 0 ahead / 0 behind) — its remote copy was
+deleted after PR #6 merged, so this session restarts the branch from merged
+history per the merged-PR protocol. HEAD is the founder's own upload commit
+(`d7c2e92`, "Add files via upload"): an 11-doc strategy pack + interactive
+UI prototype, landed in `959/`.
+
+**Arrival verification (all green before any change):** `npm install` →
+`cp` both env examples → `npm run db:setup` (demo user + 5 connections +
+40 feed posts seeded) → `npm run lint` (API tsc clean; web next-lint clean
+with 2 pre-existing `react-hooks/exhaustive-deps` warnings, non-blocking)
+→ `npm test` (**19 files / 120 tests, all green**) → `npm run build` (API
++ web clean).
+
+**What shipped (docs only):**
+- `git mv 959 docs/strategy` — the pack now lives where the campaign
+  prompt and all traceability references expect it; history preserved.
+- `docs/BACKLOG.md` reconciled with the pack: **26 new items** (A8, B6,
+  B7, C7–C10, D7–D9, E7–E13, F7–F14, G7–G12), every existing item ID
+  preserved untouched, each new item traced to its strategy doc + section;
+  extra pack detail appended to existing items' Notes (C5, C6, D5, D6, G1,
+  G3–G6, B2a, C2b) instead of duplicating them; a "Strategy pack
+  reconciliation" section records the prioritization rule
+  (charter-phase items outrank future-state items), the staleness
+  resolution (pack audited pre-PR-#6; backlog wins on E3/E4/E5/F1/F3/F5
+  status), and a **6-entry contradiction register for the founder** (BRD §6
+  v1-scope vs DMs/analytics-v2/multi-account; "no new frameworks" vs
+  mobile/TanStack/BullMQ/Meilisearch; F5 vs `/pricing`+`/changelog`+`/docs`;
+  `/dashboard`→`/app` rename; branding; monetization sequencing). Items
+  directly hit by an unresolved contradiction are held at BLOCKED (C10,
+  F9, F14, G10) rather than TODO, so no future session silently picks a
+  side.
+
+**Next step:** part 2 of this session takes **C6 + C1b** (connection
+health UI) — the highest-priority unblocked charter-phase TODO, and the
+strategy pack's own #1 build recommendation (`docs/strategy/05` §E.1).
+
 ### 2026-08-27 — Session 6 (Phase F1: real analytics)
 
 **Summary:** PR #6 still open (draft, `mergeable_state: clean`, CI green on

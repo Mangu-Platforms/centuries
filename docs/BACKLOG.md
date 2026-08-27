@@ -29,7 +29,8 @@ multiple items at once.
 | C1a | Real end-to-end validation of the Bluesky connector against production bsky.social | WAITING-ON-HUMAN | The connector is unit-tested against the real `@atproto/api` types/shapes but has never been run against a live account — needs a human to supply a real Bluesky app password for a test account (same credential the charter's "first human work" section calls for). Until then, treat C1 as "code complete, live-unverified." |
 | C1b | Surface `connections.ts`'s new `warning` field in the web connect UI | TODO | Backend now returns `{ connection, importedPosts, warning? }` when a live credential is rejected (connection kept with `status: "error"`); `apps/web/app/dashboard/connections/page.tsx` doesn't read `warning` yet. Natural to fold into C6 (connect/reconnect/disconnect, last-error UI) rather than a one-off. |
 | C2a | Real end-to-end validation of the Mastodon OAuth flow against a live instance | WAITING-ON-HUMAN | Register/callback/connector are unit- and route-tested with a mocked `masto` SDK, but the actual browser redirect dance (register → authorize on a real instance → approve → callback) has never run against a real Mastodon server. Needs a human to click through it once against a real (even freshly-created) account on any public instance — no developer app approval required, just a few clicks. |
-| C2b | Mastodon media upload, reply/repost, per-connection sync cadence | TODO | Same E3/D1 scope as Bluesky — not connector-specific, tracked at the phase level already. |
+| C2b | Mastodon media upload, reply/repost, per-connection sync cadence | TODO | Same E3/D1 scope as Bluesky — not connector-specific, tracked at the phase level already. Now concretely: media → E9, sync cadence → D7, reply/repost → D5/F2 (2026-08-27 reconciliation). |
+| A8 | CI drift check: `PLATFORMS` (api) ↔ `PLATFORM_META` (web) parity | TODO | New from strategy pack (`docs/strategy/05` §B.6). The two maps are hand-synced twins; a script compares them (id set, char limits) in CI before drift bites. |
 
 ## Phase B — Auth hardening
 
@@ -41,6 +42,13 @@ multiple items at once.
 | B4 | Session list / logout-all | DONE (2026-08-26) | `GET /api/auth/sessions` (lists active sessions, marks the caller's own via cookie match — never client-supplied, so it can't be spoofed), `DELETE /api/auth/sessions/:id` (revoke one, ownership-checked), `POST /api/auth/sessions/logout-all` (revokes every *other* session, keeps the caller's own alive). New `routes/sessions.ts` + `listActiveSessions`/`findActiveSessionIdByRawToken`/`revokeSession`/`revokeAllForUserExcept` in `lib/refreshTokens.ts`. Web: a "Active sessions" card in `/dashboard/settings` (device/IP/date, "This device" badge, per-session logout, "log out all other sessions"). **Found and fixed a real bug while smoke-testing**: `rotateRefreshToken`'s reuse-detection (B1) treated *any* already-revoked token being re-presented as theft and nuked every session for the user — correct for a token revoked by rotation, wrong for one revoked directly (logout, this feature's per-session revoke/logout-all, or a B2 password reset), since a remotely-logged-out device's browser still holds its stale cookie and will naturally try to refresh with it later. Fixed by only treating it as reuse when `replacedByHash` is set (i.e. it was actually rotated into a successor); a direct revocation now just reports "invalid". Without this fix, using "log out this device" would cascade into logging out every device, including the one doing the logging out — the opposite of what the feature is for. 8 new tests in `sessions.test.ts`, one specifically regression-testing this scenario. |
 | B5 | Settings: change password, display name, theme | DONE (2026-08-26) | Display name/bio/theme were already wired (pre-existing `PATCH /api/auth/me`). Added `POST /api/auth/change-password` (authenticated): verifies `currentPassword` via bcrypt, updates the hash, and revokes every *other* session via B4's `revokeAllForUserExcept` while keeping the session making the request alive (same reasoning as a B2 password reset — a credential change invalidates sessions that haven't just re-proven control, but the user shouldn't be logged out of the device they're using right now). Web: a "Change password" card in `/dashboard/settings`. 5 new tests (`changePassword.test.ts`). Phase B (auth hardening) is now fully complete. |
 
+### Phase B — strategy-pack additions (2026-08-27)
+
+| ID | Item | Status | Notes |
+| --- | --- | --- | --- |
+| B6 | Lockout countdown UI on `/login` (surface 423 `retryAfterSeconds` as a live countdown) | TODO | New from strategy pack (`docs/strategy/05` §B.4, `04` §2). The API already returns the value; the login page ignores it. |
+| B7 | (future-state) Passkeys/WebAuthn, 2FA/TOTP, OAuth social login | TODO | New from strategy pack (`docs/strategy/02` §A, `04` §2). All additive to the same auth card. CAPTCHA only if abuse observed. Beyond current charter. |
+
 ## Phase C — Live connectors
 
 | ID | Item | Status | Notes |
@@ -49,8 +57,12 @@ multiple items at once.
 | C2 | Mastodon OAuth 2.0 (user-supplied instance) | DONE (2026-08-26) | `src/connectors/mastodon.ts` (via the `masto` npm package — a maintained, typed Mastodon API client, same reasoning as `@atproto/api` for Bluesky) + `src/routes/mastodonAuth.ts` (`POST /api/connections/mastodon/register` dynamically registers a per-instance OAuth app and returns an `authorizeUrl`; `GET /api/connections/mastodon/callback`, unauthenticated by design since the instance redirects the browser, exchanges the code and creates the connection). No new DB table for pending OAuth attempts — the flow's state (userId, instance, dynamically-issued client id/secret, issuedAt) round-trips through the instance in an AES-256-GCM-encrypted `state` param using the same `DATA_KEY` as stored credentials, with a 10-minute TTL. Extracted `src/lib/timelineImport.ts` (shared with `connections.ts`) so the "fetch initial timeline, catch a bad credential gracefully" logic from C1 isn't duplicated. Web UI wired: `dashboard/connections` has a real OAuth connect flow for Mastodon (instance field → redirect → back with a success/error banner). Real masto SDK types verified against the installed package before writing any code. Unit + route-level tests only (mocked `masto`, no live network call); **real end-to-end validation against a live instance still needs a human** — parked as `C2a`. |
 | C3 | X API v2 OAuth 2.0 PKCE | WAITING-ON-HUMAN | Needs `TWITTER_CLIENT_ID`/`SECRET`; implement code path + env contract + UI state now, gate on env |
 | C4 | Instagram + Threads OAuth | WAITING-ON-HUMAN | Needs Meta developer app |
-| C5 | Retries, 429 backoff, token refresh, circuit breaker | TODO | Depends on C1/C2 existing |
-| C6 | Connection UI: connect/reconnect/disconnect, last-error, last-synced-at | TODO | Depends on A4 |
+| C5 | Retries, 429 backoff, token refresh, circuit breaker | TODO | Depends on C1/C2 existing (both DONE — unblocked). Strategy detail (`docs/strategy/05` §E.2): exponential backoff + jitter, respect `429`/`Retry-After`, per-connection circuit breaker (open after N consecutive failures, half-open probe), token-refresh hook. |
+| C6 | Connection UI: connect/reconnect/disconnect, last-error, last-synced-at | TODO | Depends on A4 (DONE — unblocked). Strategy detail (`docs/strategy/04` §7, `05` §E.1 + §B.2–3): add `lastSyncedAt`/`lastError` columns to `Connection`, written by `lib/sync.ts` and the connect-time import; surface "Synced Xm ago / Error: …" per connection; **Reconnect** re-prompts the credential (app-password platforms) or re-runs OAuth (Mastodon); confirmation dialog on Disconnect (today it's one un-confirmed click); folds in **C1b** (surface the connect response `warning`). |
+| C7 | `capabilities()` descriptor + optional methods (`fetchThread`, `publishReply`, `uploadMedia`) on `PlatformConnector` | TODO | New from strategy pack (`docs/strategy/04` §5–6, `07` §1: capability asymmetry across networks). Enabler for D5, E9, F2 — UI capability-gates actions per network instead of pretending uniformity. |
+| C8 | (future-state) Additional-network connectors: LinkedIn, YouTube, TikTok, Farcaster, Nostr, RSS | TODO | New from strategy pack (`docs/strategy/02` §B, `05` §C.9). Each is one connector file via the existing seam. Beyond the current charter's five platforms — charter-phase items outrank. |
+| C9 | (future-state) Connector SDK + community marketplace | TODO | New from strategy pack (`docs/strategy/02` §H, `03` Part 2, `05` §C.9, `09` §2.7). Beyond current charter. |
+| C10 | (future-state) Multi-account per platform UI (labels + default-for-publishing flag) | BLOCKED (contradiction #1) | New from strategy pack (`docs/strategy/04` §7, `02` §B). Schema already allows it (`@@unique(userId, platform, handle)`), but BRD §6 lists multi-account UI as out of scope for v1 — see the reconciliation section's contradiction register. |
 
 ## Phase D — Feed quality
 
@@ -60,8 +72,11 @@ multiple items at once.
 | D2 | Stable cursor pagination | DONE (2026-08-26) | `/api/feed`'s `orderBy` was `{ postedAt: "desc" }` alone — not unique, so two posts tied on `postedAt` (increasingly plausible now that D1 syncs on a cadence and the feed keeps growing) could be ordered differently between the initial query and a follow-up cursor query, silently skipping or repeating a row across pages. Fixed with a deterministic secondary sort key: `orderBy: [{ postedAt: "desc" }, { id: "desc" }]`. First test coverage for `/api/feed` at all (`feed.test.ts`, 5 tests): pagination stability under many posts sharing one `postedAt` (paginates the full set via cursor, asserts no duplicates and nothing skipped), platform/search/bookmarked filters, cross-user isolation. Honest caveat documented in the test itself: it passes even without the fix under SQLite (this repo's dev/test datasource), which happens to preserve insertion order for ties within one unmutated table — that's implementation behavior, not a guarantee, and doesn't hold for Postgres (prod) under a different query plan or a concurrent write between two paginated requests, which is what the fix actually targets. Manually verified against a live server too (two real pages, confirmed zero id overlap). |
 | D3 | Dedup by `(platform, externalId)` | DONE (2026-08-26) | `@@unique([userId, platform, externalId])` on `FeedPost` (scoped per-user, not global — two different NEXUS users legitimately each get their own row for the same remote post). `src/lib/timelineImport.ts` gained `importTimelinePosts()`, a shared upsert-based dedup helper used by both the initial connect-time import and D1's periodic sync: a genuinely new post is inserted, an already-seen one has its engagement counts/content refreshed but never its local `liked`/`bookmarked`/`isOwn` state. Verified the existing dev DB had zero duplicate `(userId, platform, externalId)` rows before applying the constraint (`prisma db push --accept-data-loss`, confirmed safe first via a raw `GROUP BY ... HAVING COUNT(*) > 1` query, not just assumed). |
 | D4 | Media rendering (images, then video) | DONE (2026-08-26, images only — video still TODO) | The API already carried `FeedPost.mediaUrls` end-to-end (live Bluesky/Mastodon connectors already extracted image URLs from their timelines) but the web app silently dropped it — `PostCard.tsx` never rendered it. Added a `MediaGrid` component: a single image keeps its own aspect ratio capped at a max height; 2/4 images render as even squares; 3 renders the classic one-tall-beside-two-stacked layout, all click-through to open full size. Also gave the **demo connector** deterministic sample images (`demo.ts`'s `demoImageFor`/`demoMediaUrlsFor`, same dependency-free inline-SVG-data-URI technique already used for `avatarFor` — no external network calls, consistent with this session's demo-data conventions) — without this, the always-working demo path would never have shown the new UI at all, since `DemoConnector` previously always returned `mediaUrls: []`. Re-seeded the dev DB and visually confirmed via a real headless-browser screenshot (not just "should work") that both single- and two-image posts render correctly in the actual feed page. Video rendering is not in this slice. |
-| D5 | Reply thread drawer | TODO | Read-only first |
-| D6 | Non-naive search | TODO | Replace `contains` scan |
+| D5 | Reply thread drawer | TODO | Read-only first. Strategy detail (`docs/strategy/04` §5): right-side sheet; `GET /api/feed/:id/thread` via a new optional connector `fetchThread(externalId)`; depends on C7 (capability descriptor) so networks without thread support hide the action; reply later via `publishReply`. A post-detail route can host the same thread view (`docs/strategy/03` Part 2). |
+| D6 | Non-naive search | TODO | Replace `contains` scan. Strategy detail (`docs/strategy/04` §5): server-side indexed search across the whole cache — SQLite FTS5 locally / Postgres `tsvector` GIN over `content`+`authorHandle` in prod — still cursor-paginated; Meilisearch only if >1M rows/user demands it (see contradiction #2 re: new infra). |
+| D7 | Sync hygiene: per-connection cadence + jitter | TODO | New from strategy pack (`docs/strategy/05` §B.10, `04` §9). Today every connection syncs on one fixed 5-min interval — add jitter so all connections don't fire in the same instant at scale, and allow per-connection cadence. Subsumes the sync half of C2b. |
+| D8 | Infinite scroll (IntersectionObserver sentinel, button fallback) + keyboard j/k nav | TODO | New from strategy pack (`docs/strategy/04` §5, `02` §C). Keep the Load-more button as the no-JS/reduced-motion fallback. |
+| D9 | (future-state) Lenses: persisted named filter sets; optional transparent "For You" ranked lens; deck/multi-column mode | TODO | New from strategy pack (`docs/strategy/04` §5, `02` §C, `05` §C.7). Guardrail from `09` §6: chronological stays the default — ranked is an opt-in lens, never home. Beyond current charter. |
 
 ## Phase E — Publishing system
 
@@ -74,6 +89,18 @@ multiple items at once.
 | E5 | Char-limit preview per platform incl. Instagram 2200 | DONE (2026-08-26) | Turned out bigger than "add Instagram to `PLATFORM_META`" — Instagram didn't exist anywhere in the codebase as a platform. Added it end-to-end: `apps/api/src/config.ts`'s `PLATFORMS` (2200 char limit, `#E4405F` brand color, `auth: "oauth"` — matches Threads' precedent of a demo-first card ahead of real Meta OAuth, tracked as C4), `apps/api/src/connectors/demo.ts`'s `AUTHORS`/`SNIPPETS` records, `apps/web/lib/types.ts`'s `PlatformId` union, and `apps/web/lib/platforms.tsx`'s `PLATFORM_META`/`PLATFORM_ORDER`/`ICON_PATHS` (official brand glyph, same style as the other four). Everything else — the connect UI, feed filters, publish char-limit validation, demo images/avatars — is already generic over `PLATFORM_IDS`, so no other code changes were needed to make Instagram a fully working demo platform. **Found and fixed a real type-safety gap while smoke-testing**: `apps/api/src/seed.ts`'s `DEMO_HANDLES` map was typed as `Record<string, string>` instead of `Record<PlatformId, string>`, so the missing `instagram` entry wasn't caught at compile time — it crashed `db:setup` at runtime instead (`Argument handle is missing`). Retyped to `Record<PlatformId, string>` so a future platform addition without a matching demo handle is a build error, not a startup crash. Verified via a real headless-browser walkthrough (not just types passing): Instagram shows correctly in the connect-a-platform grid, connects and appears in "Your connections" (5 total), and its demo posts (with demo images) render in the unified feed alongside the other four platforms. |
 | E6 | Idempotency keys | DONE (2026-08-26) | `PublishJob.idempotencyKey` (nullable, `@@unique([userId, idempotencyKey])` — multiple `null`s are always allowed, so callers that don't send one are unaffected). `POST /api/posts` accepts an optional `idempotencyKey`; a repeat with the same key returns the original job's current state (200, not 201 — nothing new happened) instead of publishing again. Race-safe, not just check-then-create: a genuinely concurrent duplicate (verified with real simultaneous `curl` requests, not just sequential retries) can still slip past the initial lookup and hit the unique constraint on create — caught and turned into "fetch and return the winner's job" rather than a 500. The web `Composer` generates a UUID once per mount (it fully unmounts on close, so a fresh post gets a fresh key; a retry within the same open session reuses it). **Found and fixed a real, unrelated test-suite flake while adding the concurrent-request test for this**: vitest runs test files in parallel by default, and every file shares one physical SQLite file with no per-file isolation — genuinely concurrent writes (this feature's own race test, run alongside other files) could collide as "database is locked" in an entirely different, unrelated test file. Tried a `PRAGMA busy_timeout` first; didn't help, because Prisma's connection pool means a PRAGMA set on whichever connection happened to run it doesn't apply to the *other* pooled connections used under real concurrent load — reverted that. Fixed properly with `fileParallelism: false` in a new `apps/api/vitest.config.ts`, which serializes test files (tests within a file were already sequential) — confirmed removes the flake by running the full suite twice clean after the fix, having first confirmed twice that reverting only this feature's changes made the suite reliable again (isolating the cause before guessing at a fix). |
 
+### Phase E — strategy-pack additions (2026-08-27)
+
+| ID | Item | Status | Notes |
+| --- | --- | --- | --- |
+| E7 | Per-target retry: `POST /api/posts/:id/retry` (failed targets only) + live pending→result rows in the composer | TODO | New from strategy pack (`docs/strategy/04` §6, `05` §E.3 + §C.5). `lib/publish.ts#attemptPublish` was extracted exactly for this. Idempotent; retry re-attempts only `failed` targets. |
+| E8 | Schedule UI: composer date/time popover + Planner v0 (list of upcoming scheduled posts, cancel/edit while all targets pending) | TODO | New from strategy pack (`docs/strategy/04` §6, `05` §E.4, `02` §D). The API half (E2) already works; this is the missing UI. "Post scheduled — Undo" toast per `03` Part 2. |
+| E9 | Platform-native media uploads via connector `uploadMedia` + alt-text prompt in the composer rail | TODO | New from strategy pack (`docs/strategy/04` §6, `05` §C.4). Bluesky blob upload, Mastodon `/api/v2/media`; per-platform media count/size rules added to `PLATFORMS`. Depends on C7 (capability descriptor). Subsumes the media half of C2b. Note: the pack's spec predates shipped E3 — the shipped `POST /api/media/upload` → `{url, key}` design stands; a `MediaAsset` table only if E12/F13 (media library / export) needs it. |
+| E10 | (future-state) Per-platform content variants (`PublishTarget.contentOverride`, per-platform tab in composer) | TODO | New from strategy pack (`docs/strategy/04` §6, `02` §D). Beyond current charter. |
+| E11 | (future-state) Thread builder (`PublishJob.parentJobId`/`threadIndex`; connectors chain reply-to on previous target's `externalId`) | TODO | New from strategy pack (`docs/strategy/04` §6, `02` §D). Beyond current charter. |
+| E12 | (future-state) Drafts, templates, snippet library, hashtag sets; queue slots / best-time suggestions | TODO | New from strategy pack (`docs/strategy/02` §D, `05` §C.6). Beyond current charter. The pack argues the paid Planner should ship early (`07` §6) — see contradiction #6 (sequencing decision). |
+| E13 | (future-state) AI assist drawer (`POST /api/ai/assist`: draft / fit-to-limit / alt-text / repurpose; server-proxied, per-plan quotas) | TODO | New from strategy pack (`docs/strategy/04` §6, `02` §D, `08` #37). Never blocks the manual flow. Beyond current charter. |
+
 ## Phase F — Product surface
 
 | ID | Item | Status | Notes |
@@ -85,16 +112,93 @@ multiple items at once.
 | F5 | Landing page polish | DONE (2026-08-27) | Not a marketing rewrite — the page (`apps/web/app/page.tsx`) was already well-built (hero, feature grid, integrations grid, demo-login callout). Found one real, concrete bug while reviewing it against current platform state: the hero badge hardcoded `"Four networks, one command center"` and the sub-headline hand-listed `"Twitter, Threads, Bluesky, and Mastodon"` — both went stale the moment Instagram (E5) brought the real count to five, since neither was derived from `PLATFORM_ORDER`. Same class of bug as `seed.ts`'s `DEMO_HANDLES` in E5 — a value duplicated by hand instead of computed from the single source of truth. Fixed both to derive from `PLATFORM_ORDER`/`PLATFORM_META` (a small number-word lookup for the badge, a comma-and-"and" join for the sentence), so a sixth platform can't leave this page's copy silently wrong again. Verified via a live headless-browser screenshot: badge now reads "Five networks, one command center", sub-headline lists all five platforms by name, integrations grid unaffected (already generic). |
 | F6 | Playwright smoke test | DONE (2026-08-26) | `apps/web/e2e/smoke.spec.ts` + `apps/web/playwright.config.ts` — one golden-path test driven against the real demo-connector stack (both dev servers, real API calls, zero third-party credentials): register → connect Twitter/X as a demo connection → feed loads → compose + publish a post → publish history shows it. Config spins up both `apps/api` and `apps/web` dev servers via Playwright's array `webServer` option and tears them down after. Found and fixed one locator ambiguity: `getByRole("button", { name: /Twitter \/ X/ })` matched both the platform-selector button and the "Connect Twitter / X" submit button — fixed with `{ name: "Twitter / X", exact: true }`. Verified passing twice locally on a fresh cold start (10.2s, then 9.3s). Wired into CI as a new `e2e` job in `.github/workflows/ci.yml`, gated on `build-and-test` passing first (`npx playwright install --with-deps chromium`, then `npm run test:e2e -w @nexus/web`, uploading the HTML report as an artifact only on failure). `@playwright/test` added as a devDependency of `apps/web`; `test-results/`, `playwright-report/`, `blob-report/` gitignored. |
 
+### Phase F — strategy-pack additions (2026-08-27)
+
+| ID | Item | Status | Notes |
+| --- | --- | --- | --- |
+| F7 | Web unit tests: `lib/auth.tsx` refresh/single-flight race logic, composer logic | TODO | New from strategy pack (`docs/strategy/05` §B.8). Today the web has one e2e smoke and zero unit tests. |
+| F8 | Zero-credential demo on the landing page: public unauthenticated `GET /api/demo/feed` rendered from demo connectors + one CTA | TODO | New from strategy pack (`docs/strategy/04` §1, `05` §C.1, `09` §2.2). Keep it a page, not a marketing-site rewrite (charter F5 rule). The pack's `/pricing`, `/changelog`, `/docs` sibling routes are contradiction #3 — not part of this item. |
+| F9 | (future-state) Analytics v2: nightly rollup table (`AnalyticsDaily`), p50/p95 latency percentiles, post-level performance, CSV export | BLOCKED (contradiction #1) | New from strategy pack (`docs/strategy/04` §4, `02` §E, `05` Epic 5). BRD §6 lists analytics beyond §5.6/F1 as out of scope for v1 — needs the PRD-v2 supersession decision. |
+| F10 | (future-state) The Braid: public braided profile page (`nexus.app/@you`) | TODO | New from strategy pack (`docs/strategy/02` §H, `03` Part 2, `05` §C.3, `09` §3). Beyond current charter. |
+| F11 | (future-state) Command palette (⌘K), keyboard-shortcut overlay, toast-with-undo | TODO | New from strategy pack (`docs/strategy/03` Part 2, `04` §3). Beyond current charter. |
+| F12 | (future-state) Onboarding flow (`/onboarding`: pick networks → connect or try demo → first post) | TODO | New from strategy pack (`docs/strategy/03` Part 2). Beyond current charter. |
+| F13 | (future-state) Settings expansion: notification prefs, data export (GDPR JSON zip), delete account, billing tab | TODO | New from strategy pack (`docs/strategy/04` §8, `02` §F, `05` Epic 7). Cascade deletes already modeled (`onDelete: Cascade`); export/delete is the trust play. Beyond current charter. |
+| F14 | (future-state) Unified inbox: notifications, mentions, replies — and DMs where APIs allow | BLOCKED (contradiction #1, DM half) | New from strategy pack (`docs/strategy/03` Part 2, `02` §H). BRD §6 lists cross-platform DMs as out of scope for v1. The notifications/mentions half has no BRD conflict but is beyond current charter. |
+
 ## Phase G — Production + agent hygiene
 
 | ID | Item | Status | Notes |
 | --- | --- | --- | --- |
-| G1 | Postgres datasource + real migrations | TODO | Keep SQLite path for local |
+| G1 | Postgres datasource + real migrations | TODO | Keep SQLite path for local. Strategy detail (`docs/strategy/05` §B.9 + §E.9): migrate `FeedPost.mediaUrls` from a JSON-string column to a native `Json`/`text[]` type in the same migration; add a CI job running the migrations against a Postgres service container. |
 | G2 | Harden Railway/Vercel docs, preview deploys | TODO | |
-| G3 | Observability: pino logs, metrics, error reporting hook | TODO | |
-| G4 | Security pass: CSP, exact CORS origins, secret hygiene | TODO | |
-| G5 | Improve autonomous_agent.py to edit apps/**, open PRs | TODO | Last priority — product is NEXUS, not the agent |
-| G6 | OPERATOR.md | TODO | How to run, env matrix, add a fifth platform |
+| G3 | Observability: pino logs, metrics, error reporting hook | TODO | Strategy detail (`docs/strategy/05` §E.10, `10` §3): pino structured logs bound to `requestId`, Sentry-or-equivalent error hook; OpenTelemetry later. |
+| G4 | Security pass: CSP, exact CORS origins, secret hygiene | TODO | Strategy detail (`docs/strategy/05` §B.12, `08` #19): CSP headers, pin exact CORS origins in prod, secret-rotation runbook. See also G8 (historical `JWT_SECRET` burn). |
+| G5 | Improve autonomous_agent.py to edit apps/**, open PRs | TODO | Last priority — product is NEXUS, not the agent. Known defect if ever picked up (`docs/strategy/05` §B.13): `main()` constructs a GitHub client before argparse, so even `--help` fails without creds. |
+| G6 | OPERATOR.md | TODO | How to run, env matrix, add a fifth platform. Strategy detail (`docs/strategy/04` §9): include the add-a-platform recipe (connector file → `registerLiveConnector` → `PLATFORMS` + `PLATFORM_META` → env vars → one vitest file). |
+
+### Phase G — strategy-pack additions (2026-08-27)
+
+| ID | Item | Status | Notes |
+| --- | --- | --- | --- |
+| G7 | Media privacy/safety: proxy/allowlist for remote feed images; EXIF strip on the upload path | TODO | New from strategy pack (`docs/strategy/05` §B.11). Feed images currently render third-party URLs directly (user-IP leakage to remote CDNs); should land before live connectors ship widely. |
+| G8 | Rotate any environment that ever used the historical hardcoded `JWT_SECRET` from old DEPLOY.md | WAITING-ON-HUMAN | New from strategy pack (`docs/strategy/05` §B.1, `01` §5). The documented example was rotated to a placeholder in A3, but live secrets must be assumed burned. No deployed environment exists in-repo to fix — a human owns any envs that used the old value. Unblock: human confirms no env ever used it, or rotates. |
+| G9 | (future-state) Job queue (Redis + BullMQ: per-connection queues, backoff, DLQ); webhooks; public API + API keys | TODO | New from strategy pack (`docs/strategy/10` §3, `04` §9). Pack gates BullMQ on >1k connections — consistent with the charter's "no new frameworks unless blocked" only at that scale; see contradiction #2. |
+| G10 | (future-state) Mobile apps (React Native/Expo, share-sheet, push), PWA | BLOCKED (contradiction #2) | New from strategy pack (`docs/strategy/02` §G, `08` #35). A new framework — charter's "no new frameworks" rule needs an explicit amendment before this is workable. |
+| G11 | (future-state) Enterprise: SSO (SAML/OIDC), SCIM, audit log, teams/approvals, self-hosted edition, SOC 2 readiness | TODO | New from strategy pack (`docs/strategy/02` §A/§H, `08` Phase 7, `05` Epic 6). Beyond current charter. |
+| G12 | (future-state) Billing & plans (Free/Pro/Team tiers) + pricing surface | TODO | New from strategy pack (`docs/strategy/07` §6, `05` §D.3). Beyond current charter; sequencing decision in contradiction #6. |
+
+## Strategy pack reconciliation (2026-08-27)
+
+An 11-document strategy pack + interactive UI prototype was uploaded by the
+founder on 2026-08-27 (commit `d7c2e92`, originally to `959/`, moved to
+`docs/strategy/` in this reconciliation — `git mv`, history preserved). It
+extends scope beyond the BRD; it does **not** replace the charter. This
+section records how it was folded into this backlog.
+
+**What was added:** A8, B6, B7, C7–C10, D7–D9, E7–E13, F7–F14, G7–G12 —
+each traced to its strategy doc + section in its Notes. Items marked
+"(future-state)" are beyond the current 1242-hour charter's north star.
+
+**Prioritization rule:** charter-phase items (the original A–G plan plus
+near-term additions like C7, D7, E7–E9, F7–F8, G7) outrank "(future-state)"
+items whenever both are unblocked. The charter remains the operating system;
+the pack is context and a scope extension, per the founder's instruction.
+
+**Staleness note (resolved by recency, no action needed):** the pack audited
+commit `460223c` (pre-PR #6) and therefore lists E3/E4/E5/F1/F3/F5 as open —
+they are DONE per this backlog and PR #6's merged history. Where the pack's
+"current state" disagrees with this backlog, this backlog wins. Likewise the
+pack's E3 spec (`POST /api/media` + `MediaAsset` table) predates the shipped
+design (`POST /api/media/upload` → `{url, key}`, no table); the shipped
+design stands (see E9 note).
+
+### Contradiction register — founder to resolve, do not silently pick a side
+
+1. **BRD §6 (v1 out-of-scope) vs pack scope.** BRD v1.0-r1 declares
+   cross-platform DMs, analytics beyond §5.6/F1, and multi-account UI out of
+   scope for v1. The pack proposes all three (`docs/strategy/03` Part 2
+   inbox/DMs, `04` §4 analytics v2, `04` §7 multi-account). Options: write
+   PRD v2 to supersede the BRD (`docs/strategy/08` #10), or keep them
+   parked. Affected items held at BLOCKED: C10, F9, F14 (DM half).
+2. **Charter "no new frameworks" vs pack's future stack.** React
+   Native/Expo (G10) and TanStack Query (`10` §3) are outright new
+   frameworks; BullMQ/Redis (G9) and Meilisearch (D6 escalation) are new
+   infrastructure the pack gates on scale thresholds. The scale-gated ones
+   are arguably charter-consistent *at those thresholds*; mobile needs an
+   explicit charter amendment. G10 held at BLOCKED.
+3. **Charter F5 ("not a marketing site rewrite") vs pack's public routes.**
+   The pack adds `/pricing`, `/changelog`, `/docs` (`03` Part 2, `04` §1).
+   The landing demo embed (F8) is compatible; the extra routes edge beyond
+   F5's rule. Decide when F8 starts.
+4. **`/dashboard` → `/app` rename** (`03` Part 2) vs charter "no drive-by
+   refactors". Default is keeping `/dashboard` until explicitly decided.
+5. **Branding** (Centuries vs NEXUS vs Mangu; repo + default-branch rename)
+   — the pack's own "five decisions" (`00`, `09` §5). Human-only; already
+   flagged since A3.
+6. **Monetization sequencing.** The pack argues for shipping the paid
+   Planner early (`07` §6, `05` §D.3) — that would promote E8/E12/G12 above
+   remaining charter phases. Charter order stands until the founder says
+   otherwise.
 
 ## Parked / WAITING-ON-HUMAN
 
@@ -104,7 +208,8 @@ multiple items at once.
   `ConsoleEmailProvider` (logs to server output) — there's no real
   transactional email provider account (Resend, Postmark, SMTP, etc.) yet.
   Low effort once credentials exist: implement one more `EmailProvider`,
-  swap it in based on an env var, done — no route changes needed.
+  swap it in based on an env var, done — no route changes needed. Strategy
+  pack recommends Resend or Postmark (`docs/strategy/05` §A.3).
 - **C1a (Bluesky live validation)** — code-complete, unit-tested against real
   SDK types, never run against a live account. Needs a Bluesky app password
   for a test account.
