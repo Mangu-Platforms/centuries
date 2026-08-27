@@ -40,7 +40,9 @@ async function main(): Promise<void> {
   for (const platform of PLATFORM_IDS) {
     const handle = DEMO_HANDLES[platform];
     const connection = await prisma.connection.create({
-      data: { userId: user.id, platform, handle, displayName: handle, status: "active" },
+      // lastSyncedAt: the seed itself performs the initial fetch below, so
+      // the demo account starts with honest health data instead of "never".
+      data: { userId: user.id, platform, handle, displayName: handle, status: "active", lastSyncedAt: new Date() },
     });
     const remote = await getConnector(platform).fetchTimeline({ handle }, 8);
     await prisma.feedPost.createMany({

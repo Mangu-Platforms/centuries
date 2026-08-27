@@ -60,7 +60,50 @@ function Stat({ label, value, kind }: { label: string; value: string | number; k
 export default function DashboardOverview() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
+  // Per-job in-flight set: retries of DIFFERENT jobs may run concurrently
+  // (the server's atomic claim makes that safe); only a re-click on the
+  // same job is a no-op, and only that job's button reads as busy.
+  const [retryingJobIds, setRetryingJobIds] = useState<ReadonlySet<string>>(new Set());
   const { showToast } = useToast();
+
+  // Phase E7: one-tap recovery for a partially failed cross-post — retries
+  // only the failed targets, then patches that job's row in place.
+  const retryJob = async (jobId: string) => {
+    if (retryingJobIds.has(jobId)) return;
+    setRetryingJobIds((s) => new Set(s).add(jobId));
+    try {
+      const res = await api.retryPost(jobId);
+      setHistory((jobs) =>
+        jobs.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                targets: res.results.map((r) => ({
+                  platform: r.platform,
+                  status: r.status,
+                  latencyMs: r.latencyMs,
+                  error: r.error,
+                })),
+              }
+            : j,
+        ),
+      );
+      const stillFailed = res.results.filter((r) => r.status === "failed").length;
+      showToast(
+        stillFailed === 0
+          ? "Retry succeeded — all targets published."
+          : `Retried, but ${stillFailed} target${stillFailed === 1 ? "" : "s"} still failed.`,
+      );
+    } catch {
+      showToast("Couldn't retry. Try again.");
+    } finally {
+      setRetryingJobIds((s) => {
+        const next = new Set(s);
+        next.delete(jobId);
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     api.dashboard().then(setData).catch(() => showToast("Couldn't load your overview. Try refreshing."));
@@ -177,7 +220,11 @@ export default function DashboardOverview() {
                     <span
                       key={t.platform}
                       className={
-                        t.status === "success" ? "badge-success" : t.status === "pending" ? "badge-pending" : "badge-danger"
+                        t.status === "success"
+                          ? "badge-success"
+                          : t.status === "pending" || t.status === "publishing"
+                            ? "badge-pending"
+                            : "badge-danger"
                       }
                     >
                       <PlatformGlyph platform={t.platform} className="h-3.5 w-3.5" />
@@ -186,9 +233,22 @@ export default function DashboardOverview() {
                         ? `✓ ${(t.latencyMs / 1000).toFixed(1)}s`
                         : t.status === "pending"
                           ? "· Pending"
-                          : `✕ ${t.error || "Failed"}`}
+                          : t.status === "publishing"
+                            ? "· Publishing…"
+                            : `✕ ${t.error || "Failed"}`}
                     </span>
                   ))}
+                  {job.targets.some((t) => t.status === "failed") && (
+                    <button
+                      onClick={() => retryJob(job.id)}
+                      aria-disabled={retryingJobIds.has(job.id)}
+                      className={`btn-ghost px-2 py-1 text-xs font-semibold text-brand-600 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-900/30 ${
+                        retryingJobIds.has(job.id) ? "cursor-not-allowed opacity-50" : ""
+                      }`}
+                    >
+                      {retryingJobIds.has(job.id) ? "Retrying…" : "Retry failed"}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

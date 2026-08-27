@@ -110,7 +110,14 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const targets = await Promise.all(
-      platforms.map((platform) => prisma.publishTarget.create({ data: { jobId: job.id, platform } })),
+      platforms.map((platform) =>
+        prisma.publishTarget.create({
+          // connectionId pins the account chosen at compose time — a later
+          // retry or scheduled send must publish through THIS connection,
+          // never a different account on the same platform.
+          data: { jobId: job.id, platform, connectionId: byPlatform.get(platform)!.id },
+        }),
+      ),
     );
 
     const results: Array<{ platform: PlatformId; status: string; externalId: string; error: string; latencyMs: number }> = [];
@@ -130,10 +137,192 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
         content,
         mediaUrls,
       });
+      if (outcome.status === "skipped") {
+        // A concurrent tick beat this request to a due-scheduled target's
+        // claim — report the row's actual current state, not "skipped".
+        const current = await prisma.publishTarget.findUniqueOrThrow({ where: { id: target.id } });
+        results.push({
+          platform,
+          status: current.status,
+          externalId: current.externalId,
+          error: current.error,
+          latencyMs: current.latencyMs,
+        });
+        continue;
+      }
       results.push({ platform, ...outcome });
     }
 
     return reply.code(201).send({ jobId: job.id, results });
+  });
+
+  // Phase E7: re-attempt ONLY a job's failed targets. Partial failure is
+  // already reported per target (CP03); this turns it into one-tap
+  // recovery. Race-safe by an atomic claim: each failed target is flipped
+  // failed→pending via a guarded updateMany (and attemptPublish takes its
+  // own pending→publishing claim), so a retry racing another retry or the
+  // tick worker publishes each target at most once. Rate-limited per
+  // authenticated user (auth runs first): every claim triggers an
+  // outbound publish attempt, and a per-IP bucket would be one shared
+  // global bucket behind a reverse proxy.
+  app.post(
+    "/api/posts/:id/retry",
+    {
+      preHandler: [
+        app.authenticate,
+        app.rateLimit({
+          max: 10,
+          timeWindow: "1 minute",
+          keyGenerator: (req) => (req as { user?: { sub?: string } }).user?.sub ?? req.ip,
+        }),
+      ],
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = await prisma.publishJob.findFirst({
+        where: { id, userId: request.user.sub },
+        include: { targets: true },
+      });
+      if (!job) return reply.code(404).send({ error: "Post not found" });
+
+      const failedTargets = job.targets.filter((t) => t.status === "failed");
+      const mediaUrls = JSON.parse(job.mediaUrls) as string[];
+
+      const connections = failedTargets.length
+        ? await prisma.connection.findMany({ where: { userId: request.user.sub } })
+        : [];
+      const byPlatform = new Map(connections.map((c) => [c.platform, c]));
+      const byId = new Map(connections.map((c) => [c.id, c]));
+
+      let retried = 0;
+      for (const target of failedTargets) {
+        const platform = target.platform as PlatformId;
+        // Pin to the compose-time connection (see PublishTarget.connectionId);
+        // platform fallback only for legacy rows without a pin.
+        const connection = target.connectionId ? byId.get(target.connectionId) : byPlatform.get(platform);
+        if (!connection) {
+          await prisma.publishTarget.updateMany({
+            where: { id: target.id, status: "failed" },
+            data: {
+              error: target.connectionId
+                ? `The ${platform} connection this post was composed for has been removed`
+                : `No ${platform} connection found at retry time`,
+            },
+          });
+          continue;
+        }
+
+        // The atomic claim: only the request that wins this update may
+        // re-publish this target. A crash between this claim and the
+        // attempt strands the target as "pending" — the tick worker's
+        // stale-strand sweep (lib/publish.ts) recovers it, and a strand in
+        // "publishing" is surfaced as check-before-retrying. Never a
+        // silent double post.
+        const claim = await prisma.publishTarget.updateMany({
+          where: { id: target.id, status: "failed" },
+          data: { status: "pending", error: "" },
+        });
+        if (claim.count === 0) continue;
+
+        const outcome = await attemptPublish({
+          targetId: target.id,
+          userId: request.user.sub,
+          connection,
+          platform,
+          content: job.content,
+          mediaUrls,
+        });
+        if (outcome.status !== "skipped") retried++;
+      }
+
+      const { results } = await jobResponse(job.id);
+      return reply.send({ jobId: job.id, retried, results });
+    },
+  );
+
+  // Phase E8: manage a scheduled post before it fires. Both routes require
+  // (a) every target still "pending" AND (b) a strictly future scheduledAt.
+  // (b) is what makes this race-free without locks: the tick worker only
+  // ever claims targets of jobs whose scheduledAt is in the past, so a
+  // future-scheduled job cannot be mid-publish while we cancel or edit it.
+  // Anything already attempted (or already due) is ledger, not editable.
+  app.delete("/api/posts/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const job = await prisma.publishJob.findFirst({
+      where: { id, userId: request.user.sub },
+      include: { targets: true },
+    });
+    if (!job) return reply.code(404).send({ error: "Post not found" });
+
+    const editable =
+      job.targets.every((t) => t.status === "pending") &&
+      job.scheduledAt !== null &&
+      job.scheduledAt.getTime() > Date.now();
+    if (!editable) {
+      return reply.code(409).send({ error: "Only a not-yet-due scheduled post can be canceled" });
+    }
+
+    await prisma.publishJob.delete({ where: { id: job.id } }); // targets cascade
+    return reply.send({ ok: true });
+  });
+
+  const editSchema = z.object({
+    content: z.string().min(1).max(5000).optional(),
+    scheduledAt: z.string().datetime().optional(),
+  });
+
+  app.patch("/api/posts/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = editSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0].message });
+
+    const job = await prisma.publishJob.findFirst({
+      where: { id, userId: request.user.sub },
+      include: { targets: true },
+    });
+    if (!job) return reply.code(404).send({ error: "Post not found" });
+
+    const editable =
+      job.targets.every((t) => t.status === "pending") &&
+      job.scheduledAt !== null &&
+      job.scheduledAt.getTime() > Date.now();
+    if (!editable) {
+      return reply.code(409).send({ error: "Only a not-yet-due scheduled post can be edited" });
+    }
+
+    const content = parsed.data.content ?? job.content;
+    // Re-validate limits against the job's own targets (CP02 holds on edit
+    // exactly as it does on create).
+    const platforms = job.targets.map((t) => t.platform).filter(isPlatform);
+    const tooLong = platforms.find((p) => content.length > PLATFORMS[p].charLimit);
+    if (tooLong) {
+      return reply.code(400).send({
+        error: `Content exceeds the ${PLATFORMS[tooLong].name} limit of ${PLATFORMS[tooLong].charLimit} characters`,
+      });
+    }
+
+    let scheduledAt = job.scheduledAt;
+    if (parsed.data.scheduledAt) {
+      const next = new Date(parsed.data.scheduledAt);
+      if (next.getTime() <= Date.now()) {
+        return reply.code(400).send({ error: "The new send time must be in the future" });
+      }
+      scheduledAt = next;
+    }
+
+    const updated = await prisma.publishJob.update({
+      where: { id: job.id },
+      data: { content, scheduledAt },
+    });
+    return reply.send({
+      job: {
+        id: updated.id,
+        content: updated.content,
+        scheduledAt: updated.scheduledAt,
+        mediaUrls: JSON.parse(updated.mediaUrls) as string[],
+        createdAt: updated.createdAt,
+      },
+    });
   });
 
   // Publishing history (BRD DS03).

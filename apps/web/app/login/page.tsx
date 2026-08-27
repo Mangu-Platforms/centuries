@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
@@ -23,6 +23,15 @@ function LoginPageInner() {
   const [password, setPassword] = useState("password123");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Phase B6: a 423 lockout carries retryAfterSeconds — surface it as a
+  // live countdown instead of a static error the user retries against.
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+
+  useEffect(() => {
+    if (lockoutSeconds <= 0) return;
+    const t = setTimeout(() => setLockoutSeconds((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [lockoutSeconds]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,7 +41,13 @@ function LoginPageInner() {
       await login(email, password);
       router.push("/dashboard");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed");
+      if (err instanceof ApiError && err.status === 423) {
+        const retryAfter = (err.details as { retryAfterSeconds?: number } | null)?.retryAfterSeconds;
+        if (typeof retryAfter === "number" && retryAfter > 0) setLockoutSeconds(retryAfter);
+        setError(err.message);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Login failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -68,9 +83,16 @@ function LoginPageInner() {
             </div>
             <input id="password" type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </div>
-          {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
-          <button type="submit" className="btn-primary w-full py-2.5" disabled={loading}>
-            {loading ? "Logging in…" : "Log in"}
+          {lockoutSeconds > 0 ? (
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" role="status" aria-live="polite">
+              Account temporarily locked after too many failed attempts. Try again in{" "}
+              <span className="font-semibold tabular-nums">{lockoutSeconds}s</span>.
+            </p>
+          ) : (
+            error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+          )}
+          <button type="submit" className="btn-primary w-full py-2.5" disabled={loading || lockoutSeconds > 0}>
+            {loading ? "Logging in…" : lockoutSeconds > 0 ? `Locked (${lockoutSeconds}s)` : "Log in"}
           </button>
         </form>
 

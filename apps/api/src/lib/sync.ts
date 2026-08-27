@@ -31,14 +31,26 @@ export async function syncConnection(connection: Connection): Promise<{ imported
     instance: connection.instance || undefined,
     appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
     accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+    connectionId: connection.id,
   };
 
+  // Both health stamps below use updateMany guarded on the updatedAt value
+  // read at tick start, for two reasons: (a) updateMany returns count 0
+  // instead of throwing when the row was deleted mid-fetch (a thrown P2025
+  // would abort the whole tick for every remaining connection), and (b) a
+  // slow tick that raced a concurrent reconnect — which bumps updatedAt —
+  // must not clobber the reconnect's newer credential/health state with a
+  // stale verdict. A skipped stamp self-corrects on the next tick.
   let remote;
   try {
     remote = await connector.fetchTimeline(ctx, SYNC_FETCH_LIMIT);
   } catch (err) {
-    await prisma.connection.update({ where: { id: connection.id }, data: { status: "error" } });
-    return { imported: 0, error: err instanceof Error ? err.message : "Sync failed" };
+    const message = err instanceof Error ? err.message : "Sync failed";
+    await prisma.connection.updateMany({
+      where: { id: connection.id, updatedAt: connection.updatedAt },
+      data: { status: "error", lastError: message },
+    });
+    return { imported: 0, error: message };
   }
 
   const { newCount } = await importTimelinePosts({
@@ -48,9 +60,12 @@ export async function syncConnection(connection: Connection): Promise<{ imported
     posts: remote,
   });
 
-  if (connection.status === "error") {
-    await prisma.connection.update({ where: { id: connection.id }, data: { status: "active" } });
-  }
+  // Stamp the health fields (Phase C6) on every successful sync; this also
+  // self-heals a connection that was in "error" from a previous failure.
+  await prisma.connection.updateMany({
+    where: { id: connection.id, updatedAt: connection.updatedAt },
+    data: { status: "active", lastSyncedAt: new Date(), lastError: "" },
+  });
 
   return { imported: newCount };
 }
@@ -68,9 +83,15 @@ export async function syncAllConnections(): Promise<SyncAllResult> {
   let postsImported = 0;
   let connectionsFailed = 0;
   for (const connection of connections) {
-    const result = await syncConnection(connection);
-    postsImported += result.imported;
-    if (result.error) connectionsFailed++;
+    try {
+      const result = await syncConnection(connection);
+      postsImported += result.imported;
+      if (result.error) connectionsFailed++;
+    } catch {
+      // One connection's unexpected failure (e.g. its row or user deleted
+      // mid-tick) must never abort the rest of the tick.
+      connectionsFailed++;
+    }
   }
 
   return { connectionsSynced: connections.length, postsImported, connectionsFailed };

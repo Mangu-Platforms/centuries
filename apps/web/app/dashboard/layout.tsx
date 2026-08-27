@@ -19,6 +19,12 @@ function Icon({ name, className = "h-5 w-5" }: { name: string; className?: strin
       </>
     ),
     feed: <path d="M4 6h16M4 12h16M4 18h10" />,
+    planner: (
+      <>
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4M8 2v4M3 10h18" />
+      </>
+    ),
     analytics: (
       <>
         <path d="M3 3v18h18" />
@@ -69,6 +75,7 @@ function Icon({ name, className = "h-5 w-5" }: { name: string; className?: strin
 const NAV = [
   { href: "/dashboard", label: "Overview", icon: "overview" },
   { href: "/dashboard/feed", label: "Unified Feed", icon: "feed" },
+  { href: "/dashboard/planner", label: "Planner", icon: "planner" },
   { href: "/dashboard/analytics", label: "Analytics", icon: "analytics" },
   { href: "/dashboard/connections", label: "Connections", icon: "connections" },
   { href: "/dashboard/settings", label: "Settings", icon: "settings" },

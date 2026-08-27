@@ -101,10 +101,19 @@ export async function importInitialTimeline(params: {
     remote = await connector.fetchTimeline(ctx, limit);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch initial timeline";
-    await prisma.connection.update({ where: { id: connectionId }, data: { status: "error" } });
+    await prisma.connection.update({
+      where: { id: connectionId },
+      data: { status: "error", lastError: message },
+    });
     return { importedPosts: 0, warning: `Connected, but could not fetch the initial timeline: ${message}` };
   }
 
   const { newCount } = await importTimelinePosts({ userId, connectionId, platform, posts: remote });
+  // A successful fetch is a successful sync: stamp the health fields (Phase
+  // C6) and make sure a previously errored connection (reconnect path) heals.
+  await prisma.connection.update({
+    where: { id: connectionId },
+    data: { status: "active", lastSyncedAt: new Date(), lastError: "" },
+  });
   return { importedPosts: newCount };
 }

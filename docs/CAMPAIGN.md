@@ -46,6 +46,345 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7, part 8 (D8: infinite scroll + j/k nav; D6: real search)
+
+**D8:** IntersectionObserver sentinel (600px lookahead) auto-loads the
+next feed page; the button stays as the no-JS fallback and
+`prefers-reduced-motion` users keep explicit paging. j/k moves focus
+between posts (tabIndex=-1 articles with a visible ring), suppressed
+while typing / with modifiers / with a dialog open. Verified live:
+20→40 auto-load with no click, focus indexes correct, "jk" typed into
+search stays text.
+
+**D6 (provider-agnostic step):** search upgraded from one raw substring
+over `content` to multi-term AND across content + author handle + author
+name — every whitespace-separated term must match somewhere. Full-text
+indexing (SQLite FTS5 / Postgres `tsvector`) is deliberately deferred
+into G1: FTS5 needs raw SQL + a virtual table + sync triggers that the
+Postgres migration would immediately redo differently, and the charter
+keeps Prisma queries provider-agnostic until G1 breaks that seal
+deliberately. Noted in the backlog as the explicit residual.
+
+### 2026-08-27 — Session 7, part 7 (A8 + B6 + D7; E7 review hardening)
+
+**Three small charter items:** **A8** — platform-parity drift check as a
+vitest suite in existing CI (mutation-verified: a perturbed charLimit
+fails). **B6** — the login page turns a 423 into a live countdown with
+the submit button disabled (`ApiError` now carries the parsed error
+body); e2e-tested via route interception after observing that genuinely
+tripping the lockout flakes same-minute re-runs against the per-IP
+login rate limit. **D7** — the sync scheduler self-reschedules with
+±20% jitter and arms the next tick only after the current one settles
+(no lockstep thundering, no overlapping ticks); per-connection cadence
+deliberately deferred until a scale signal demands it.
+
+**E7 adversarial review returned (29 agents): 8 confirmed findings.**
+One was the retry-vs-tick double-post race already fixed in `307bf6d`
+(the review independently confirmed the fix closes it); one was stale
+against E8 (the composer really schedules now). The remaining six were
+fixed in `303062b`, the deepest being: **PublishTarget now pins its
+compose-time connection** (a user with two accounts on one platform
+could have a retry silently publish through the wrong one — pins also
+applied in the tick worker; a deleted pinned connection fails
+explicitly rather than substituting); **tick-time recovery sweeps** for
+crash-stranded targets (stranded `pending` on an unscheduled job → the
+next tick publishes it, provably safe since a pending target never
+reached a connector; stale `publishing` → flipped to a visible "check
+the platform before retrying" failure, never silently re-attempted);
+**attemptPublish's failure-catch narrowed to the connector call only**
+(a feed-cache collision after a live publish could relabel a live post
+"failed" and invite a double-posting retry); **retry/reconnect rate
+limits re-keyed per authenticated user** (a per-IP pre-auth bucket is
+one shared global bucket behind a reverse proxy, drainable by
+anonymous traffic); plus two web polish fixes (per-job retry lock,
+stale composer error). +4 regression tests.
+
+**Commands run (all green):** lint · **26 files / 194 tests** · build ·
+both e2e specs passed twice back-to-back (flake check).
+
+### 2026-08-27 — Session 7, part 6 (C7 + D5: capabilities seam + thread drawer)
+
+**Summary:** C7 (capability descriptor) and D5's read-only half in one
+arc, tests first (4 + 3, all observed red before implementation).
+Capabilities are *derived* from which optional methods a connector
+implements (`capabilitiesOf()`) rather than a hand-maintained table —
+the review lesson from A6/E5 (hand-synced twins drift) applied
+preemptively. Demo connectors got a deterministic `fetchThread` so the
+zero-credential demo path exercises the whole drawer; live
+Bluesky/Mastodon thread support + reply posting split out as **D5b**.
+`GET /api/feed` now marks each post `threadAvailable` (memoized per
+platform+credential pair), `GET /api/feed/:id/thread` serves the local
+cached row as root + connector replies (capability-gated 404), and the
+web got a right-side `ThreadDrawer` with the same a11y contract as the
+connections dialog.
+
+**Commands run (all green):** lint (after fixing two TS null-safety
+errors it caught in the new feed code — `FeedPost.connectionId` is
+nullable) · **25 files / 183 tests** · build · live walkthrough:
+drawer opened from a demo post's reply count, root + replies rendered,
+Escape closed with focus restored (screenshot). DB reseeded.
+
+### 2026-08-27 — Session 7, part 5 (E8: schedule UI + Planner v0; E7 hardening)
+
+**E7 hardening first:** while writing E7's review brief I spotted a real
+double-post window my own atomic claim didn't cover — a retry-armed
+`pending` target on a past-`scheduledAt` job could be claimed
+concurrently by `/internal/tick` (and two overlapping ticks always had
+this window). Fixed at the root: `attemptPublish` itself now takes an
+atomic `pending → publishing` claim before touching any connector; the
+loser reports `skipped` and touches nothing (tick counts it as neither
+outcome, the immediate path reports the row's real state, retry doesn't
+count it). Regression test: two concurrent `attemptPublish` calls on one
+pending target → exactly one success + one skipped + one feed post.
+Web renders the transient `publishing` state as an amber badge.
+
+**E8 shipped (tests first, 6/7 observed red):** see the backlog note —
+composer Schedule toggle + Undo strip, Planner v0 page with inline
+edit/cancel, `DELETE`/`PATCH /api/posts/:id` gated on
+all-pending + strictly-future `scheduledAt` (the future-only rule is
+what makes cancel/edit race-free against the tick without locks).
+
+**Commands run (all green):** lint · **23 files / 176 tests** (7+1 new)
+· build · live walkthrough with screenshots: scheduled via the
+composer → Undo returned the draft → re-scheduled → planner lists it →
+inline edit saved → DB-backdated → `/internal/tick` (dev secret) fired
+it → 5/5 targets published → history green, planner empty. DB reseeded.
+
+### 2026-08-27 — Session 7, part 4 (E7: per-target retry + a latent app-wide bug)
+
+**Summary:** E7 per the strategy slice order — `POST /api/posts/:id/retry`
+re-attempts only a job's failed targets (rate-limited, race-safe via an
+atomic failed→pending claim so a double-clicked retry can never
+double-post), with Retry buttons in publishing history and the composer
+results panel. Tests written first (6, observed 5/6 red before
+implementation). The "live pending→result rows" half is split out as E14.
+
+**The real story — a latent app-wide bug found by live verification:**
+the first browser walkthrough of the retry button failed, and the
+root cause was NOT the new code: the web client's `request()` always
+sent `Content-Type: application/json`, and Fastify 400s any body-less
+POST claiming a JSON body (`FST_ERR_CTP_EMPTY_JSON_BODY`). That means
+**like, bookmark, logout, logout-all, and resend-verification have been
+silently broken in the web UI** — the optimistic like rolled back on
+perfectly healthy servers (post-F3 with an error toast; before that,
+invisibly). Reproduced via curl before touching anything, fixed by only
+sending the header when a body exists, and guarded with a new e2e step
+asserting a like persists across reload. Also gave like/bookmark
+state-reflecting `aria-label`s + `aria-pressed` (screen-reader users
+previously couldn't tell liked state). Lesson repeated from C5's review:
+mock- and inject-level tests never send real browser headers — only the
+e2e path could catch this, and it only did because the charter insists
+on verifying by actually running the UI.
+
+**Commands run (all green):** lint · **22 files / 168 tests** (6 new) ·
+build · e2e (now includes the like-regression step) · live walkthrough
+with screenshots: a genuinely failed target healed through the history
+Retry button (success toast, badges patched in place), like persisting
+across reload. DB reseeded.
+
+### 2026-08-27 — Session 7, part 3 (Phase C5: connector resilience)
+
+**Summary:** With C6 shipped, C5 was the last non-parked charter item in
+Phase C. Tests were authored first (18 cases in `resilience.test.ts`),
+though — honest note — the first execution happened after the
+implementation was written, so the red state was never observed for this
+slice (unlike part 2's 7/8 observed failures); the tests assert
+mock-call counts and breaker state that a pass-through wrapper could not
+satisfy, so they are not tautological.
+
+**What shipped:** `src/lib/resilience.ts` + registry wiring + the
+`refreshCredentials` seam on `PlatformConnector` +
+`ConnectionContext.connectionId` threaded through every call site (see
+the C5 backlog note for full behavior). Design decisions worth
+remembering: retry only *provably* transient failures — a status-less,
+code-less error is indistinguishable from a rejection and is NOT
+retried, which also keeps every existing mocked-failure test fast and
+unchanged; publish is never auto-retried on a network failure
+(double-post risk — recovery is E7's user-driven per-target retry) and
+exactly once on 429; the breaker is in-process state, documented as a
+single-instance limitation until G1+.
+
+**Commands run (all green):** `npm run lint` · `npm test` — **21 files /
+150 tests** (18 new) · `npm run build` · Playwright e2e golden path
+(10.7s) against a fresh dev stack — demo connectors are unwrapped, so
+the zero-credential path is bit-for-bit unchanged. Live-API resilience
+behavior (real 429s, real token expiry) is mock-verified only; real
+validation rides on the C1a/C2a human unlocks.
+
+**Ops note for future sessions:** running `npm run build` while `npm run
+dev` is up corrupts the web dev server's `.next` (both write it —
+"Cannot find module './NNN.js'" 500s). Kill the dev stack or
+`rm -rf apps/web/.next` and restart after building.
+
+**Review (outcome):** the adversarial review (2 finders → 3-refuter
+panel, 47 agents) confirmed **13 findings** (2 refuted); all 13 fixed in
+`c12957d`. The big ones — worth remembering as design lessons:
+- **`@atproto` wraps network failures in `XRPCError{status: 1}`**, so
+  "status present → judge by status" classified every Bluesky network
+  error as non-transient and the entire retry feature was inert for the
+  primary live connector. Only 100–599 count as HTTP verdicts now; other
+  errors fall through to a cause-chain walk. Lesson: validate error
+  classification against the real SDK's error shapes, not hand-built
+  test errors.
+- **A 60s breaker cooldown can never help a 5-minute sync cadence** —
+  by the next tick it had always half-opened. Cooldown is now 10 min,
+  the half-open probe is a true single attempt (with a `probing` flag so
+  concurrent callers keep failing fast), and every attempt is bounded by
+  a 10s per-attempt timeout so a black-holed host can't stall the
+  sequential tick for undici's minutes-long defaults.
+- **An open breaker was eating the user's own fix**: reconnect with a
+  corrected credential failed fast and (worse) the validated candidate
+  was then not persisted. User-initiated verification (reconnect route,
+  OAuth callback) now resets the breaker first — the human IS the probe,
+  and those routes are rate-limited.
+- Plus: refresh single-flight per connection (rotating refresh tokens
+  are single-use), Retry-After-over-cap fails fast instead of a doomed
+  capped retry, retried-publish `latencyMs` re-measured wall-clock (NF03
+  analytics honesty), `INTERACTIVE_RESILIENCE` profile for
+  browser-blocked routes, breaker-entry eviction on connection delete.
+  12 new tests pin all of it. Suite after fixes: **162 passing**; lint,
+  build, e2e all green.
+
+### 2026-08-27 — Session 7, part 2 (Phase C6 + C1b: connection health)
+
+**Summary:** Re-derived priority from the reconciled backlog rather than
+taking the founder's suggestion on faith — and confirmed it: after A6b/A8
+(explicitly low-priority polish) and B6 (cosmetic), the Phase C frontier is
+C5 vs C6+C1b; took C6+C1b because it fixes a live defect (a rejected live
+credential was invisible in the UI), is the strategy pack's #1 build
+recommendation, and gives C5's future circuit-breaker state a place to be
+seen. Wrote the failing test first (8 cases, 7 failed on the missing schema
+fields), then implemented.
+
+**What shipped:**
+- `Connection.lastSyncedAt` / `Connection.lastError` (schema + `prisma db
+  push` + regenerate). Every successful timeline fetch — connect-time
+  import, reconnect, periodic sync — stamps `lastSyncedAt`, clears
+  `lastError`, and sets `status: "active"` (self-heal); every failure
+  records the message and flips `status: "error"`. `importInitialTimeline`
+  and `syncConnection` share the semantics, so the OAuth callback path
+  (`mastodonAuth.ts`) gets them for free.
+- `POST /api/connections/:id/reconnect` — ownership-checked; app-password
+  platforms may carry a fresh credential (re-encrypted before storage,
+  same as connect); credential-less (demo-mode) connections just re-fetch;
+  response shape identical to connect (`{ connection, importedPosts,
+  warning? }`). `publicConnection()` now exposes the two health fields
+  (encrypted material still never serialized).
+- Web connections page: per-row "Synced Xm ago" / "Not synced yet",
+  status-colored badges (emerald/amber/rose via existing badge classes),
+  rose `lastError` strip, per-row **Reconnect** (Mastodon → OAuth
+  re-authorization redirect; Bluesky → app-password dialog; demo →
+  direct re-fetch), and **Disconnect now requires confirmation** in an
+  accessible dialog (role=dialog, aria-modal, labelled, initial focus +
+  focus restore, Escape cancels, Tab cycles). C1b: a `warning` on the
+  connect/reconnect response renders an amber strip instead of a false
+  success. `PLATFORM_META` gained `authKind` (semantic mirror of the API's
+  `auth` field) so the UI stops string-matching display labels.
+- Seed stamps `lastSyncedAt` so the demo account starts with honest
+  health data.
+
+**Commands run (all green, evidence in session scratchpad):**
+- `npm run lint` — clean (the same 2 pre-existing `exhaustive-deps`
+  warnings, no new ones).
+- `npm test` — **20 files / 128 tests** (8 new in
+  `connectionHealth.test.ts`, written failing-first).
+- `npm run build` — API + web clean.
+- `PLAYWRIGHT_CHROMIUM_PATH=… npx playwright test` — e2e golden path
+  passed against the running dev stack (9.4s).
+- Live headless-browser walkthrough with screenshots (not just selector
+  asserts): demo login works; 5 rows show "Synced Xm ago"; a
+  DB-simulated errored Mastodon row shows the rose badge + error strip;
+  the Disconnect dialog opens with proper roles and closes on Escape
+  without disconnecting; the Bluesky Reconnect dialog prompts for an app
+  password (cancelled — deliberately never submitted, so no live API was
+  called with a fabricated credential, per the charter hard stop); the
+  errored Mastodon connection was healed through the real Reconnect
+  button (badge → active, "Synced just now", error strip gone).
+- DB reseeded to a clean demo state afterward.
+
+**Review:** an adversarial multi-agent review (3 independent finders →
+3-refuter verification panel per finding, 45 agents total) ran over the
+slice diff before push: 14 raw findings, 12 confirmed (each upheld by
+≥2 of 3 refuters), 2 refuted. All 12 were fixed in `9e9bf32` before the
+first push. The two HIGH findings were the same root defect: the
+Mastodon OAuth callback hard-rejected an already-connected handle, so
+the one platform whose reconnect requires re-authorization could never
+actually reconnect — the freshly minted token was thrown away. Also
+fixed: the reconnect route was an unthrottled outbound
+credential-testing oracle (now rate-limited 5/min like the Mastodon
+register route); reconnect persisted a candidate credential before
+validating it (could destroy a known-good stored app password — now
+validate-first); the sync worker's new unconditional health stamp could
+throw P2025 on a mid-tick deleted row and abort the whole tick, and a
+slow stale tick could clobber a concurrent reconnect's newer state (now
+`updateMany` guarded on a new `updatedAt` optimistic-concurrency
+column, plus per-connection try/catch in the loop); and five web
+focus/state bugs (focus dropped to `<body>` after confirming either
+dialog, escapable focus trap via clicks on non-interactive dialog text,
+bfcache-stuck "Reconnecting…" button, stale error strip). +4 regression
+tests → suite is 132 passing. Focus fixes re-verified live in the
+browser (focus lands on the busy button / list heading, never
+`<body>`), demo login + reconnect walkthrough re-verified, DB reseeded.
+
+**Blockers:** none for this slice. C3/C4's "waiting on credentials" card
+state deliberately stays with those items — no live connector exists for
+X/Threads/Instagram yet, so "demo mode" is currently the accurate UI.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/lib/sync.ts`, `apps/api/src/lib/timelineImport.ts`,
+`apps/api/src/routes/connections.ts`, `apps/api/src/seed.ts`,
+`apps/api/src/__tests__/connectionHealth.test.ts` (new),
+`apps/web/lib/types.ts`, `apps/web/lib/api.ts`,
+`apps/web/lib/platforms.tsx`,
+`apps/web/app/dashboard/connections/page.tsx`, `docs/BACKLOG.md`,
+`docs/CAMPAIGN.md`.
+
+**Next step for the next session:** take **C5** (retries, 429 backoff +
+jitter, token-refresh hook, per-connection circuit breaker so one dead
+platform can't sink `/api/feed`) — the last non-parked charter item in
+Phase C, now with C6's `lastError`/status UI to surface its state. Then
+E7 (per-target retry) per the strategy pack's slice order.
+
+### 2026-08-27 — Session 7, part 1 (strategy-pack backlog reconciliation)
+
+**Context on arrival:** fresh container; branch
+`claude/nexus-1242-autonomous-build-vo8ecx` exists locally at exactly the
+default branch's tip (`d7c2e92`, 0 ahead / 0 behind) — its remote copy was
+deleted after PR #6 merged, so this session restarts the branch from merged
+history per the merged-PR protocol. HEAD is the founder's own upload commit
+(`d7c2e92`, "Add files via upload"): an 11-doc strategy pack + interactive
+UI prototype, landed in `959/`.
+
+**Arrival verification (all green before any change):** `npm install` →
+`cp` both env examples → `npm run db:setup` (demo user + 5 connections +
+40 feed posts seeded) → `npm run lint` (API tsc clean; web next-lint clean
+with 2 pre-existing `react-hooks/exhaustive-deps` warnings, non-blocking)
+→ `npm test` (**19 files / 120 tests, all green**) → `npm run build` (API
++ web clean).
+
+**What shipped (docs only):**
+- `git mv 959 docs/strategy` — the pack now lives where the campaign
+  prompt and all traceability references expect it; history preserved.
+- `docs/BACKLOG.md` reconciled with the pack: **26 new items** (A8, B6,
+  B7, C7–C10, D7–D9, E7–E13, F7–F14, G7–G12), every existing item ID
+  preserved untouched, each new item traced to its strategy doc + section;
+  extra pack detail appended to existing items' Notes (C5, C6, D5, D6, G1,
+  G3–G6, B2a, C2b) instead of duplicating them; a "Strategy pack
+  reconciliation" section records the prioritization rule
+  (charter-phase items outrank future-state items), the staleness
+  resolution (pack audited pre-PR-#6; backlog wins on E3/E4/E5/F1/F3/F5
+  status), and a **6-entry contradiction register for the founder** (BRD §6
+  v1-scope vs DMs/analytics-v2/multi-account; "no new frameworks" vs
+  mobile/TanStack/BullMQ/Meilisearch; F5 vs `/pricing`+`/changelog`+`/docs`;
+  `/dashboard`→`/app` rename; branding; monetization sequencing). Items
+  directly hit by an unresolved contradiction are held at BLOCKED (C10,
+  F9, F14, G10) rather than TODO, so no future session silently picks a
+  side.
+
+**Next step:** part 2 of this session takes **C6 + C1b** (connection
+health UI) — the highest-priority unblocked charter-phase TODO, and the
+strategy pack's own #1 build recommendation (`docs/strategy/05` §E.1).
+
 ### 2026-08-27 — Session 6 (Phase F1: real analytics)
 
 **Summary:** PR #6 still open (draft, `mergeable_state: clean`, CI green on

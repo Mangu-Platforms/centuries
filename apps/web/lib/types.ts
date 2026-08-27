@@ -34,6 +34,10 @@ export interface Connection {
   instance: string;
   status: "active" | "expired" | "error";
   createdAt: string;
+  /** Last successful timeline fetch (initial import or periodic sync); null before the first one. */
+  lastSyncedAt: string | null;
+  /** Most recent fetch failure message; empty string when the last fetch succeeded. */
+  lastError: string;
 }
 
 export interface FeedPost {
@@ -51,11 +55,28 @@ export interface FeedPost {
   bookmarked: boolean;
   isOwn: boolean;
   postedAt: string;
+  /** Whether this post's connection supports thread viewing (C7/D5). */
+  threadAvailable?: boolean;
+}
+
+/** A connector-supplied reply inside a thread (D5) — not a cached FeedPost row. */
+export interface ThreadReply {
+  externalId: string;
+  authorHandle: string;
+  authorName: string;
+  authorAvatar: string;
+  content: string;
+  mediaUrls: string[];
+  likeCount: number;
+  repostCount: number;
+  replyCount: number;
+  postedAt: string;
 }
 
 export interface PublishTargetResult {
   platform: PlatformId;
-  status: "pending" | "success" | "failed";
+  /** "publishing" is a transient in-flight claim (see api lib/publish.ts). */
+  status: "pending" | "publishing" | "success" | "failed";
   externalId?: string;
   error: string;
   latencyMs: number;

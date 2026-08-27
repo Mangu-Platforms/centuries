@@ -1,11 +1,28 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import type { Connection, PlatformId } from "@/lib/types";
 import { PLATFORM_META, PLATFORM_ORDER, PlatformGlyph } from "@/lib/platforms";
 import { useToast } from "@/lib/toast";
+
+function timeAgo(iso: string): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+const STATUS_BADGE: Record<Connection["status"], { className: string; dot: string }> = {
+  active: { className: "badge-success", dot: "bg-emerald-500" },
+  expired: { className: "badge-pending", dot: "bg-amber-500" },
+  error: { className: "badge-danger", dot: "bg-rose-500" },
+};
 
 export default function ConnectionsPage() {
   return (
@@ -25,7 +42,15 @@ function ConnectionsPageInner() {
   const [credential, setCredential] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which connection a modal is open for, if any. "reconnect" is only used
+  // for app-password platforms (it re-prompts the credential); OAuth
+  // platforms redirect through their authorization flow instead, and
+  // credential-less (demo-mode) connections reconnect directly.
+  const [dialog, setDialog] = useState<{ kind: "disconnect" | "reconnect"; connection: Connection } | null>(null);
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
+  const listHeadingRef = useRef<HTMLHeadingElement>(null);
   const { showToast } = useToast();
 
   const load = () =>
@@ -34,15 +59,32 @@ function ConnectionsPageInner() {
     load();
   }, []);
 
+  // Returning via the browser Back button from an abandoned OAuth redirect
+  // typically restores this page from the bfcache with its old state —
+  // including a stuck "Reconnecting…"/"Redirecting…" busy flag. Clear both.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) {
+        setReconnectingId(null);
+        setBusy(false);
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   // Returning from the Mastodon OAuth redirect (routes/mastodonAuth.ts sends
   // the browser back here with these query params) — surface the result
   // once, then strip them from the URL so a refresh doesn't re-show it.
   useEffect(() => {
     const connected = searchParams.get("mastodonConnected");
     const imported = searchParams.get("imported");
+    const reconnected = searchParams.get("reconnected");
     const mastodonError = searchParams.get("mastodonError");
     if (connected) {
-      setMessage(`Connected Mastodon! Imported ${imported ?? 0} posts.`);
+      setMessage(
+        `${reconnected ? "Reconnected" : "Connected"} Mastodon! Imported ${imported ?? 0} posts.`,
+      );
       setError(null);
       load();
       router.replace("/dashboard/connections");
@@ -58,6 +100,7 @@ function ConnectionsPageInner() {
     e.preventDefault();
     setError(null);
     setMessage(null);
+    setWarning(null);
 
     if (platform === "mastodon") {
       if (!instance.trim()) return setError("Enter your Mastodon instance (e.g. mastodon.social).");
@@ -76,7 +119,13 @@ function ConnectionsPageInner() {
     setBusy(true);
     try {
       const res = await api.connect(platform, handle.trim(), instance || undefined, credential || undefined);
-      setMessage(`Connected ${PLATFORM_META[platform].name}! Imported ${res.importedPosts} posts.`);
+      if (res.warning) {
+        // C1b: a live credential the platform rejected keeps the connection
+        // (status "error") — say so instead of a false success.
+        setWarning(res.warning);
+      } else {
+        setMessage(`Connected ${PLATFORM_META[platform].name}! Imported ${res.importedPosts} posts.`);
+      }
       setHandle("");
       setInstance("");
       setCredential("");
@@ -89,8 +138,55 @@ function ConnectionsPageInner() {
   };
 
   const disconnect = async (id: string) => {
-    await api.disconnect(id);
-    load();
+    try {
+      await api.disconnect(id);
+      load();
+    } catch {
+      showToast("Couldn't disconnect. Try again.");
+    }
+  };
+
+  // Reconnect for OAuth platforms = re-run the authorization flow; for
+  // app-password platforms = re-prompt the credential (modal); for
+  // credential-less demo-mode connections = just re-fetch the timeline.
+  const startReconnect = async (c: Connection) => {
+    if (reconnectingId) return; // one reconnect at a time; button is aria-disabled, not disabled, so guard here
+    if (c.platform === "mastodon" && c.instance) {
+      setReconnectingId(c.id);
+      try {
+        const { authorizeUrl } = await api.mastodonRegister(c.instance);
+        window.location.href = authorizeUrl;
+      } catch (err) {
+        showToast(err instanceof ApiError ? err.message : "Failed to start Mastodon authorization");
+        setReconnectingId(null);
+      }
+      return;
+    }
+    if (PLATFORM_META[c.platform].authKind === "app_password") {
+      setDialog({ kind: "reconnect", connection: c });
+      return;
+    }
+    await runReconnect(c.id);
+  };
+
+  const runReconnect = async (id: string, newCredential?: string) => {
+    setReconnectingId(id);
+    setMessage(null);
+    setWarning(null);
+    setError(null);
+    try {
+      const res = await api.reconnect(id, newCredential);
+      if (res.warning) {
+        setWarning(res.warning);
+      } else {
+        setMessage(`Reconnected ${PLATFORM_META[res.connection.platform].name}. Imported ${res.importedPosts} new posts.`);
+      }
+      load();
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Couldn't reconnect. Try again.");
+    } finally {
+      setReconnectingId(null);
+    }
   };
 
   const meta = PLATFORM_META[platform];
@@ -191,6 +287,11 @@ function ConnectionsPageInner() {
               {error}
             </p>
           )}
+          {warning && (
+            <p className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300">
+              {warning}
+            </p>
+          )}
           {message && (
             <p className="rounded-xl bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
               {message}
@@ -210,7 +311,7 @@ function ConnectionsPageInner() {
       </section>
 
       <section className="card p-5 sm:p-6">
-        <h2 className="mb-4 font-bold text-slate-900 dark:text-white">
+        <h2 ref={listHeadingRef} tabIndex={-1} className="mb-4 font-bold text-slate-900 outline-none dark:text-white">
           Your connections{" "}
           <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
             {connections.length}
@@ -222,38 +323,220 @@ function ConnectionsPageInner() {
           </div>
         ) : (
           <div className="space-y-2.5">
-            {connections.map((c) => (
-              <div
-                key={c.id}
-                className="flex items-center justify-between rounded-xl border border-slate-100 p-3.5 transition hover:border-slate-200 dark:border-slate-800 dark:hover:border-slate-700"
-              >
-                <div className="flex items-center gap-3.5">
-                  <PlatformGlyph platform={c.platform} className="h-10 w-10" />
-                  <div>
-                    <div className="font-semibold text-slate-800 dark:text-slate-100">{c.handle}</div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      {PLATFORM_META[c.platform].name}
-                      {c.instance ? ` · ${c.instance}` : ""}
+            {connections.map((c) => {
+              const statusBadge = STATUS_BADGE[c.status] ?? STATUS_BADGE.error;
+              return (
+                <div
+                  key={c.id}
+                  className="rounded-xl border border-slate-100 p-3.5 transition hover:border-slate-200 dark:border-slate-800 dark:hover:border-slate-700"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3.5">
+                      <PlatformGlyph platform={c.platform} className="h-10 w-10 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-slate-800 dark:text-slate-100">{c.handle}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          {PLATFORM_META[c.platform].name}
+                          {c.instance ? ` · ${c.instance}` : ""}
+                          {" · "}
+                          {c.lastSyncedAt ? `Synced ${timeAgo(c.lastSyncedAt)}` : "Not synced yet"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className={statusBadge.className}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${statusBadge.dot}`} />
+                        {c.status}
+                      </span>
+                      <button
+                        onClick={() => startReconnect(c)}
+                        // aria-disabled (with a guard in startReconnect) instead
+                        // of disabled: a disabled element can't receive the
+                        // dialog's focus restore, silently dropping keyboard
+                        // focus to <body> after a confirmed reconnect.
+                        aria-disabled={reconnectingId === c.id}
+                        className={`btn-ghost px-2.5 py-1.5 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 ${
+                          reconnectingId === c.id ? "cursor-not-allowed opacity-50" : ""
+                        }`}
+                      >
+                        {reconnectingId === c.id ? "Reconnecting…" : "Reconnect"}
+                      </button>
+                      <button
+                        onClick={() => setDialog({ kind: "disconnect", connection: c })}
+                        className="btn-ghost px-2.5 py-1.5 text-sm text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10"
+                      >
+                        Disconnect
+                      </button>
                     </div>
                   </div>
+                  {c.lastError && (
+                    <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 ring-1 ring-inset ring-rose-600/15 dark:bg-rose-500/10 dark:text-rose-400">
+                      Error: {c.lastError}
+                    </p>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="badge-success">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    {c.status}
-                  </span>
-                  <button
-                    onClick={() => disconnect(c.id)}
-                    className="btn-ghost px-2.5 py-1.5 text-sm text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10"
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
+
+      {dialog?.kind === "disconnect" && (
+        <ConnectionDialog
+          title={`Disconnect ${PLATFORM_META[dialog.connection.platform].name}?`}
+          description={`${dialog.connection.handle} will be removed from NEXUS. Posts already in your feed stay, but this platform stops syncing and publishing until you connect it again.`}
+          confirmLabel="Disconnect"
+          destructive
+          onCancel={() => setDialog(null)}
+          onConfirm={async () => {
+            const id = dialog.connection.id;
+            setDialog(null);
+            await disconnect(id);
+            // The dialog's focus-restore target (the row's Disconnect
+            // button) unmounts with the row — land focus on the list
+            // heading instead of letting it fall to <body>.
+            listHeadingRef.current?.focus();
+          }}
+        />
+      )}
+      {dialog?.kind === "reconnect" && (
+        <ConnectionDialog
+          title={`Reconnect ${PLATFORM_META[dialog.connection.platform].name}`}
+          description={`Enter a new app password for ${dialog.connection.handle}. It replaces the stored one and is encrypted before it's saved.`}
+          confirmLabel="Reconnect"
+          credentialLabel="App password (demo: any value)"
+          onCancel={() => setDialog(null)}
+          onConfirm={async (newCredential) => {
+            const id = dialog.connection.id;
+            setDialog(null);
+            await runReconnect(id, newCredential || undefined);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Small confirm dialog used for disconnect confirmation and app-password
+ * reconnect. Accessible: role=dialog + aria-modal, labelled by its title,
+ * focus moves in on open and returns to the previously focused element on
+ * close, Escape cancels, and Tab cycles within the dialog.
+ */
+function ConnectionDialog(props: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  credentialLabel?: string;
+  destructive?: boolean;
+  onCancel: () => void;
+  onConfirm: (credential: string) => void | Promise<void>;
+}) {
+  const { title, description, confirmLabel, credentialLabel, destructive, onCancel, onConfirm } = props;
+  const [credential, setCredential] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = "connection-dialog-title";
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const focusables = () =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>("input, button, [href], [tabindex]:not([tabindex='-1'])") ?? [],
+      );
+    focusables()[0]?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+        return;
+      }
+      if (e.key === "Tab") {
+        const items = focusables();
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        // Clicking non-interactive dialog text drops DOM focus to <body>;
+        // without this containment branch the next Tab would walk into the
+        // obscured page behind the backdrop despite aria-modal.
+        if (!panel?.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/60 p-4 pt-32 backdrop-blur-sm"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="card animate-fade-up w-full max-w-md p-6 outline-none"
+      >
+        <h2 id={titleId} className="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          {title}
+        </h2>
+        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{description}</p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onConfirm(credential);
+          }}
+        >
+          {credentialLabel && (
+            <div className="mt-4">
+              <label className="label" htmlFor="connection-dialog-credential">
+                {credentialLabel}
+              </label>
+              <input
+                id="connection-dialog-credential"
+                className="input"
+                type="password"
+                value={credential}
+                onChange={(e) => setCredential(e.target.value)}
+                placeholder="xxxx-xxxx-xxxx-xxxx"
+              />
+            </div>
+          )}
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" onClick={onCancel} className="btn-outline">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className={
+                destructive
+                  ? "btn inline-flex bg-rose-600 text-white shadow-sm hover:bg-rose-500 focus-visible:ring-rose-400"
+                  : "btn-primary"
+              }
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

@@ -27,6 +27,20 @@ export interface ConnectionContext {
   refreshToken?: string;
   /** Decrypted app password (e.g. Bluesky), when the connection has one stored. */
   appPassword?: string;
+  /**
+   * The Connection row this call acts for. Used by the resilience layer
+   * (Phase C5) to key the per-connection circuit breaker and to persist
+   * rotated tokens after a credential refresh. Connectors themselves
+   * should not need it.
+   */
+  connectionId?: string;
+}
+
+/** Rotated tokens returned by a connector's refreshCredentials hook (Phase C5). */
+export interface RefreshedCredentials {
+  accessToken: string;
+  refreshToken?: string;
+  tokenExpiresAt?: Date;
 }
 
 /**
@@ -39,4 +53,60 @@ export interface PlatformConnector {
   readonly platform: PlatformId;
   fetchTimeline(ctx: ConnectionContext, limit: number): Promise<RemotePost[]>;
   publish(ctx: ConnectionContext, content: string, mediaUrls: string[]): Promise<PublishResult>;
+  /**
+   * Optional (Phase C5): exchange the connection's refresh token for fresh
+   * credentials when a call fails with 401. Return null when refresh isn't
+   * possible (no refresh token, revoked grant) — the original auth error
+   * then stands. The resilience layer calls this at most once per
+   * operation and persists whatever it returns; connectors never write to
+   * the database themselves. First real implementer will be X's OAuth 2.0
+   * PKCE connector (C3), whose access tokens expire hourly.
+   */
+  refreshCredentials?(ctx: ConnectionContext): Promise<RefreshedCredentials | null>;
+  /**
+   * Optional (Phase C7/D5): fetch the conversation around one post — the
+   * root post first, then its replies in display order. Implement only
+   * where the platform actually exposes threads; the UI capability-gates
+   * on this via capabilitiesOf().
+   */
+  fetchThread?(ctx: ConnectionContext, externalId: string): Promise<RemotePost[]>;
+  /**
+   * Optional (Phase C7/D5-later): publish a reply to an existing remote
+   * post. Not called anywhere yet — the seam exists so thread reading and
+   * reply writing land as separate, individually testable slices.
+   */
+  publishReply?(ctx: ConnectionContext, content: string, inReplyToExternalId: string): Promise<PublishResult>;
+  /**
+   * Optional (Phase F2): mirror a local like to the platform. Local state
+   * is the source of truth and commits regardless; the mirror is
+   * best-effort (a failure never rolls the local toggle back).
+   */
+  setLike?(ctx: ConnectionContext, externalId: string, liked: boolean): Promise<void>;
+  /**
+   * Optional (Phase F2): mirror a local bookmark to the platform, where
+   * the platform has a bookmark API at all (Mastodon does; Bluesky
+   * doesn't). Same best-effort semantics as setLike.
+   */
+  setBookmark?(ctx: ConnectionContext, externalId: string, bookmarked: boolean): Promise<void>;
+}
+
+/**
+ * What a specific connector instance can do beyond the base interface.
+ * Derived from which optional methods it implements — never a separate
+ * hand-maintained table that could drift.
+ */
+export interface ConnectorCapabilities {
+  thread: boolean;
+  reply: boolean;
+  likeMirror: boolean;
+  bookmarkMirror: boolean;
+}
+
+export function capabilitiesOf(connector: PlatformConnector): ConnectorCapabilities {
+  return {
+    thread: typeof connector.fetchThread === "function",
+    reply: typeof connector.publishReply === "function",
+    likeMirror: typeof connector.setLike === "function",
+    bookmarkMirror: typeof connector.setBookmark === "function",
+  };
 }

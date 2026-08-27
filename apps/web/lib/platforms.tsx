@@ -2,13 +2,13 @@ import type { PlatformId } from "./types";
 
 export const PLATFORM_META: Record<
   PlatformId,
-  { name: string; color: string; charLimit: number; authLabel: string }
+  { name: string; color: string; charLimit: number; authLabel: string; authKind: "oauth" | "app_password" }
 > = {
-  twitter: { name: "Twitter / X", color: "#1d9bf0", charLimit: 280, authLabel: "OAuth 2.0" },
-  threads: { name: "Threads", color: "#000000", charLimit: 500, authLabel: "Instagram OAuth" },
-  bluesky: { name: "Bluesky", color: "#0085ff", charLimit: 300, authLabel: "App password" },
-  mastodon: { name: "Mastodon", color: "#6364ff", charLimit: 500, authLabel: "OAuth 2.0" },
-  instagram: { name: "Instagram", color: "#E4405F", charLimit: 2200, authLabel: "Meta OAuth" },
+  twitter: { name: "Twitter / X", color: "#1d9bf0", charLimit: 280, authLabel: "OAuth 2.0", authKind: "oauth" },
+  threads: { name: "Threads", color: "#000000", charLimit: 500, authLabel: "Instagram OAuth", authKind: "oauth" },
+  bluesky: { name: "Bluesky", color: "#0085ff", charLimit: 300, authLabel: "App password", authKind: "app_password" },
+  mastodon: { name: "Mastodon", color: "#6364ff", charLimit: 500, authLabel: "OAuth 2.0", authKind: "oauth" },
+  instagram: { name: "Instagram", color: "#E4405F", charLimit: 2200, authLabel: "Meta OAuth", authKind: "oauth" },
 };
 
 export const PLATFORM_ORDER: PlatformId[] = ["twitter", "threads", "bluesky", "mastodon", "instagram"];

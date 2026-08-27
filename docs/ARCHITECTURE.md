@@ -35,6 +35,12 @@ workspaces, per the build charter's "no new frameworks" rule.
   per platform: live implementation if configured, demo otherwise.
 - `src/lib/crypto.ts` (Phase A4) — AES-256-GCM encrypt/decrypt for connection
   credentials at rest, keyed by the server-side `DATA_KEY` env var.
+- `src/lib/resilience.ts` (Phase C5) — `wrapConnector()` decorator the
+  registry applies to live connectors: retries with backoff + jitter for
+  provably transient failures, 429 handling (publish: never retried on a
+  network failure, once on 429), a per-connection circuit breaker, and the
+  `refreshCredentials` hook that persists rotated tokens encrypted. Demo
+  connectors are never wrapped.
 - `prisma/schema.prisma` — `User`, `Connection`, `FeedPost`, `PublishJob`,
   `PublishTarget`. SQLite locally, Postgres in production (Phase G1); no
   raw SQL, so the schema stays provider-agnostic.

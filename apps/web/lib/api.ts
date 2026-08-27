@@ -7,6 +7,7 @@ import type {
   PublishHistoryItem,
   PublishTargetResult,
   SessionInfo,
+  ThreadReply,
   User,
 } from "./types";
 
@@ -28,9 +29,12 @@ export function clearToken(): void {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** The parsed error response body, for callers that need more than the message (e.g. 423's retryAfterSeconds). */
+  details?: unknown;
+  constructor(message: string, status: number, details?: unknown) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -102,7 +106,12 @@ async function uploadMedia(file: File, isRetry = false): Promise<{ url: string; 
 async function request<T>(path: string, options: RequestInit = {}, isRetry = false): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    // Only claim a JSON body when there actually is one: Fastify rejects a
+    // body-less POST that carries Content-Type: application/json with
+    // FST_ERR_CTP_EMPTY_JSON_BODY (400) — which silently broke every
+    // body-less POST here (like, bookmark, logout, logout-all, resend
+    // verification) until E7's retry endpoint surfaced it.
+    ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -120,7 +129,7 @@ async function request<T>(path: string, options: RequestInit = {}, isRetry = fal
 
   if (!res.ok) {
     const message = (body && (body.error || body.message)) || `Request failed (${res.status})`;
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, body);
   }
   return body as T;
 }
@@ -178,10 +187,16 @@ export const api = {
   connections: () => request<{ connections: Connection[] }>("/api/connections"),
 
   connect: (platform: string, handle: string, instance?: string, credential?: string) =>
-    request<{ connection: Connection; importedPosts: number }>("/api/connections", {
+    request<{ connection: Connection; importedPosts: number; warning?: string }>("/api/connections", {
       method: "POST",
       body: JSON.stringify({ platform, handle, instance, credential }),
     }),
+
+  reconnect: (id: string, credential?: string) =>
+    request<{ connection: Connection; importedPosts: number; warning?: string }>(
+      `/api/connections/${id}/reconnect`,
+      { method: "POST", body: JSON.stringify(credential ? { credential } : {}) },
+    ),
 
   disconnect: (id: string) =>
     request<{ ok: boolean }>(`/api/connections/${id}`, { method: "DELETE" }),
@@ -202,6 +217,9 @@ export const api = {
     return request<{ posts: FeedPost[]; nextCursor: string | null }>(`/api/feed${qs ? `?${qs}` : ""}`);
   },
 
+  thread: (id: string) =>
+    request<{ root: FeedPost; replies: ThreadReply[] }>(`/api/feed/${id}/thread`),
+
   like: (id: string) => request<{ post: FeedPost }>(`/api/feed/${id}/like`, { method: "POST" }),
 
   bookmark: (id: string) =>
@@ -209,11 +227,32 @@ export const api = {
 
   uploadMedia: (file: File) => uploadMedia(file),
 
-  publish: (content: string, platforms: string[], mediaUrls: string[] = [], idempotencyKey?: string) =>
+  publish: (
+    content: string,
+    platforms: string[],
+    mediaUrls: string[] = [],
+    idempotencyKey?: string,
+    scheduledAt?: string,
+  ) =>
     request<{ jobId: string; results: PublishTargetResult[] }>("/api/posts", {
       method: "POST",
-      body: JSON.stringify({ content, platforms, mediaUrls, idempotencyKey }),
+      body: JSON.stringify({ content, platforms, mediaUrls, idempotencyKey, scheduledAt }),
     }),
+
+  cancelPost: (jobId: string) =>
+    request<{ ok: boolean }>(`/api/posts/${jobId}`, { method: "DELETE" }),
+
+  editPost: (jobId: string, data: { content?: string; scheduledAt?: string }) =>
+    request<{ job: { id: string; content: string; scheduledAt: string | null } }>(
+      `/api/posts/${jobId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    ),
+
+  retryPost: (jobId: string) =>
+    request<{ jobId: string; retried: number; results: PublishTargetResult[] }>(
+      `/api/posts/${jobId}/retry`,
+      { method: "POST" },
+    ),
 
   history: () => request<{ jobs: PublishHistoryItem[] }>("/api/posts/history"),
 

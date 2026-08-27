@@ -36,7 +36,7 @@ vi.mock("masto", () => ({
 const { buildApp } = await import("../app.js");
 const { prisma } = await import("../db.js");
 const { config } = await import("../config.js");
-const { encryptSecret } = await import("../lib/crypto.js");
+const { encryptSecret, decryptSecret } = await import("../lib/crypto.js");
 
 async function registerUser(app: Awaited<ReturnType<typeof buildApp>>) {
   const email = `mastodon-oauth-test-${crypto.randomUUID()}@nexus.app`;
@@ -217,6 +217,69 @@ describe("Mastodon OAuth flow", () => {
 
       const posts = await prisma.feedPost.count({ where: { connectionId: connection!.id } });
       expect(posts).toBe(1);
+
+      await prisma.user.delete({ where: { id: userId } });
+      await app.close();
+    });
+
+    it("treats an already-connected handle as a reconnect: refreshes the token and heals the connection", async () => {
+      tokenCreateMock.mockResolvedValue({ accessToken: "fresh-token", tokenType: "Bearer", scope: "read write", createdAt: 2 });
+      verifyCredentialsMock.mockResolvedValue({ username: "alice", acct: "alice", displayName: "Alice Renamed" });
+      getTimelineMock.mockResolvedValue([]);
+
+      const app = await buildApp();
+      const { userId } = await registerUser(app);
+
+      // An existing connection whose stored token has gone stale.
+      const existing = await prisma.connection.create({
+        data: {
+          userId,
+          platform: "mastodon",
+          handle: "@alice@mastodon.social",
+          displayName: "Alice",
+          instance: "mastodon.social",
+          status: "error",
+          lastError: "The access token was revoked",
+          accessTokenEnc: encryptSecret("stale-revoked-token"),
+        },
+      });
+
+      const state = encryptSecret(
+        JSON.stringify({
+          userId,
+          instanceUrl: "https://mastodon.social",
+          clientId: "cid",
+          clientSecret: "csecret",
+          issuedAt: Date.now(),
+        }),
+      );
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/connections/mastodon/callback?code=authcode456&state=${encodeURIComponent(state)}`,
+      });
+
+      // Re-authorizing an already-connected account must NOT be an error —
+      // it is the reconnect path (Phase C6). The fresh token replaces the
+      // stale one and the connection heals.
+      expect(res.statusCode).toBe(302);
+      const location = new URL(res.headers.location as string);
+      expect(location.searchParams.get("mastodonError")).toBeNull();
+      expect(location.searchParams.get("mastodonConnected")).toBe("1");
+      expect(location.searchParams.get("reconnected")).toBe("1");
+
+      const healed = await prisma.connection.findUniqueOrThrow({ where: { id: existing.id } });
+      expect(healed.status).toBe("active");
+      expect(healed.lastError).toBe("");
+      expect(healed.lastSyncedAt).not.toBeNull();
+      expect(healed.displayName).toBe("Alice Renamed");
+      expect(decryptSecret(healed.accessTokenEnc)).toBe("fresh-token");
+
+      // Still exactly one connection for this handle — no duplicate row.
+      const count = await prisma.connection.count({
+        where: { userId, platform: "mastodon", handle: "@alice@mastodon.social" },
+      });
+      expect(count).toBe(1);
 
       await prisma.user.delete({ where: { id: userId } });
       await app.close();
