@@ -76,6 +76,18 @@ export interface PlatformConnector {
    * reply writing land as separate, individually testable slices.
    */
   publishReply?(ctx: ConnectionContext, content: string, inReplyToExternalId: string): Promise<PublishResult>;
+  /**
+   * Optional (Phase F2): mirror a local like to the platform. Local state
+   * is the source of truth and commits regardless; the mirror is
+   * best-effort (a failure never rolls the local toggle back).
+   */
+  setLike?(ctx: ConnectionContext, externalId: string, liked: boolean): Promise<void>;
+  /**
+   * Optional (Phase F2): mirror a local bookmark to the platform, where
+   * the platform has a bookmark API at all (Mastodon does; Bluesky
+   * doesn't). Same best-effort semantics as setLike.
+   */
+  setBookmark?(ctx: ConnectionContext, externalId: string, bookmarked: boolean): Promise<void>;
 }
 
 /**
@@ -86,11 +98,15 @@ export interface PlatformConnector {
 export interface ConnectorCapabilities {
   thread: boolean;
   reply: boolean;
+  likeMirror: boolean;
+  bookmarkMirror: boolean;
 }
 
 export function capabilitiesOf(connector: PlatformConnector): ConnectorCapabilities {
   return {
     thread: typeof connector.fetchThread === "function",
     reply: typeof connector.publishReply === "function",
+    likeMirror: typeof connector.setLike === "function",
+    bookmarkMirror: typeof connector.setBookmark === "function",
   };
 }

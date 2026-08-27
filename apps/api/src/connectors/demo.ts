@@ -226,6 +226,22 @@ class DemoConnector implements PlatformConnector {
     return posts;
   }
 
+  /**
+   * Phase F2: the demo platform accepts like/bookmark mirrors as no-op
+   * successes — the local toggle is the source of truth, and this keeps
+   * the zero-credential path exercising the same code live connectors
+   * will. Tiny deterministic latency so the demo behaves like a network.
+   */
+  async setLike(ctx: ConnectionContext, externalId: string, _liked: boolean): Promise<void> {
+    void _liked;
+    await new Promise((r) => setTimeout(r, hashString(externalId + ctx.handle) % 40));
+  }
+
+  async setBookmark(ctx: ConnectionContext, externalId: string, _bookmarked: boolean): Promise<void> {
+    void _bookmarked;
+    await new Promise((r) => setTimeout(r, hashString(externalId + ctx.handle) % 40));
+  }
+
   async publish(
     ctx: ConnectionContext,
     _content: string,

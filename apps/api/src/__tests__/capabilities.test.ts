@@ -18,14 +18,14 @@ describe("connector capabilities (C7)", () => {
       fetchTimeline: async () => [],
       publish: async () => ({ externalId: "x", latencyMs: 0 }),
     };
-    expect(capabilitiesOf(bare)).toEqual({ thread: false, reply: false });
+    expect(capabilitiesOf(bare)).toEqual({ thread: false, reply: false, likeMirror: false, bookmarkMirror: false });
 
     const threaded = {
       ...bare,
       fetchThread: async () => [],
       publishReply: async () => ({ externalId: "r", latencyMs: 0 }),
     };
-    expect(capabilitiesOf(threaded)).toEqual({ thread: true, reply: true });
+    expect(capabilitiesOf(threaded)).toEqual({ thread: true, reply: true, likeMirror: false, bookmarkMirror: false });
   });
 
   it("demo connectors support threads (deterministic demo replies)", async () => {

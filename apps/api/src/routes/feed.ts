@@ -177,6 +177,37 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
     return { root: serialize(post), replies };
   });
 
+  // Phase F2: best-effort engagement mirroring. The local toggle is the
+  // source of truth and has already committed by the time the mirror
+  // runs; a mirror failure (no connection, incapable connector, network)
+  // never rolls it back or fails the request. Mirrors are awaited (demo
+  // is near-instant; live calls are time-bounded by the resilience
+  // wrapper) so tests and callers observe a settled outcome.
+  async function mirrorEngagement(
+    post: { platform: string; connectionId: string | null; externalId: string },
+    action: "like" | "bookmark",
+    value: boolean,
+  ): Promise<void> {
+    try {
+      if (!isPlatform(post.platform) || !post.connectionId) return;
+      const connection = await prisma.connection.findUnique({ where: { id: post.connectionId } });
+      if (!connection) return;
+      const hasCredentials = Boolean(connection.appPasswordEnc || connection.accessTokenEnc);
+      const connector = getConnector(post.platform, hasCredentials, INTERACTIVE_RESILIENCE);
+      const ctx = {
+        handle: connection.handle,
+        instance: connection.instance || undefined,
+        appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
+        accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+        connectionId: connection.id,
+      };
+      if (action === "like" && connector.setLike) await connector.setLike(ctx, post.externalId, value);
+      if (action === "bookmark" && connector.setBookmark) await connector.setBookmark(ctx, post.externalId, value);
+    } catch {
+      // Best-effort by contract — the local state stands either way.
+    }
+  }
+
   app.post("/api/feed/:id/like", { preHandler: [app.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const post = await prisma.feedPost.findFirst({ where: { id, userId: request.user.sub } });
@@ -187,6 +218,7 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
       where: { id },
       data: { liked, likeCount: { increment: liked ? 1 : -1 } },
     });
+    await mirrorEngagement(post, "like", liked);
     return { post: serialize(updated) };
   });
 
@@ -195,10 +227,12 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
     const post = await prisma.feedPost.findFirst({ where: { id, userId: request.user.sub } });
     if (!post) return reply.code(404).send({ error: "Post not found" });
 
+    const bookmarked = !post.bookmarked;
     const updated = await prisma.feedPost.update({
       where: { id },
-      data: { bookmarked: !post.bookmarked },
+      data: { bookmarked },
     });
+    await mirrorEngagement(post, "bookmark", bookmarked);
     return { post: serialize(updated) };
   });
 }

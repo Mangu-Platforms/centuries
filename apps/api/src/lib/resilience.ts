@@ -412,6 +412,29 @@ export function wrapConnector(
             ),
           )
       : undefined,
+    // Engagement mirrors (F2) are best-effort and idempotent (they set a
+    // state, not toggle it): one guarded, time-bounded attempt each — the
+    // caller treats failure as "mirror didn't land", never as an error.
+    setLike: connector.setLike
+      ? (ctx, externalId, liked) =>
+          guarded(ctx, (c) =>
+            withAttemptTimeout(
+              () => connector.setLike!(c, externalId, liked),
+              opts.attemptTimeoutMs,
+              `${connector.platform} like mirror`,
+            ),
+          )
+      : undefined,
+    setBookmark: connector.setBookmark
+      ? (ctx, externalId, bookmarked) =>
+          guarded(ctx, (c) =>
+            withAttemptTimeout(
+              () => connector.setBookmark!(c, externalId, bookmarked),
+              opts.attemptTimeoutMs,
+              `${connector.platform} bookmark mirror`,
+            ),
+          )
+      : undefined,
 
     fetchTimeline: (ctx, limit) =>
       guarded(ctx, async (initialCtx, probe) => {
