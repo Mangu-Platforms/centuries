@@ -80,10 +80,34 @@ dev` is up corrupts the web dev server's `.next` (both write it —
 "Cannot find module './NNN.js'" 500s). Kill the dev stack or
 `rm -rf apps/web/.next` and restart after building.
 
-**Review:** the same adversarial review as part 2 is running on this
-slice's diff at push time (pushed before the verdict per the repo's
-commit-and-push hook; PR #8 is a draft and CI re-runs on every push).
-Outcome and any fixes land in the next commit on this branch.
+**Review (outcome):** the adversarial review (2 finders → 3-refuter
+panel, 47 agents) confirmed **13 findings** (2 refuted); all 13 fixed in
+`c12957d`. The big ones — worth remembering as design lessons:
+- **`@atproto` wraps network failures in `XRPCError{status: 1}`**, so
+  "status present → judge by status" classified every Bluesky network
+  error as non-transient and the entire retry feature was inert for the
+  primary live connector. Only 100–599 count as HTTP verdicts now; other
+  errors fall through to a cause-chain walk. Lesson: validate error
+  classification against the real SDK's error shapes, not hand-built
+  test errors.
+- **A 60s breaker cooldown can never help a 5-minute sync cadence** —
+  by the next tick it had always half-opened. Cooldown is now 10 min,
+  the half-open probe is a true single attempt (with a `probing` flag so
+  concurrent callers keep failing fast), and every attempt is bounded by
+  a 10s per-attempt timeout so a black-holed host can't stall the
+  sequential tick for undici's minutes-long defaults.
+- **An open breaker was eating the user's own fix**: reconnect with a
+  corrected credential failed fast and (worse) the validated candidate
+  was then not persisted. User-initiated verification (reconnect route,
+  OAuth callback) now resets the breaker first — the human IS the probe,
+  and those routes are rate-limited.
+- Plus: refresh single-flight per connection (rotating refresh tokens
+  are single-use), Retry-After-over-cap fails fast instead of a doomed
+  capped retry, retried-publish `latencyMs` re-measured wall-clock (NF03
+  analytics honesty), `INTERACTIVE_RESILIENCE` profile for
+  browser-blocked routes, breaker-entry eviction on connection delete.
+  12 new tests pin all of it. Suite after fixes: **162 passing**; lint,
+  build, e2e all green.
 
 ### 2026-08-27 — Session 7, part 2 (Phase C6 + C1b: connection health)
 
