@@ -59,7 +59,8 @@ export interface FeedPost {
 
 export interface PublishTargetResult {
   platform: PlatformId;
-  status: "pending" | "success" | "failed";
+  /** "publishing" is a transient in-flight claim (see api lib/publish.ts). */
+  status: "pending" | "publishing" | "success" | "failed";
   externalId?: string;
   error: string;
   latencyMs: number;

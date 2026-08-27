@@ -213,7 +213,11 @@ export default function DashboardOverview() {
                     <span
                       key={t.platform}
                       className={
-                        t.status === "success" ? "badge-success" : t.status === "pending" ? "badge-pending" : "badge-danger"
+                        t.status === "success"
+                          ? "badge-success"
+                          : t.status === "pending" || t.status === "publishing"
+                            ? "badge-pending"
+                            : "badge-danger"
                       }
                     >
                       <PlatformGlyph platform={t.platform} className="h-3.5 w-3.5" />
@@ -222,7 +226,9 @@ export default function DashboardOverview() {
                         ? `✓ ${(t.latencyMs / 1000).toFixed(1)}s`
                         : t.status === "pending"
                           ? "· Pending"
-                          : `✕ ${t.error || "Failed"}`}
+                          : t.status === "publishing"
+                            ? "· Publishing…"
+                            : `✕ ${t.error || "Failed"}`}
                     </span>
                   ))}
                   {job.targets.some((t) => t.status === "failed") && (

@@ -62,7 +62,9 @@ export async function runDueScheduledSends(): Promise<ScheduledSendResult> {
         mediaUrls,
       });
       if (outcome.status === "success") targetsPublished++;
-      else targetsFailed++;
+      else if (outcome.status === "failed") targetsFailed++;
+      // "skipped": another caller (a concurrent retry or overlapping tick)
+      // holds the claim — neither published nor failed by THIS tick.
     }
   }
 
@@ -70,7 +72,8 @@ export async function runDueScheduledSends(): Promise<ScheduledSendResult> {
 }
 
 export interface PublishAttemptResult {
-  status: "success" | "failed";
+  /** "skipped" = another caller already holds this target's publish claim. */
+  status: "success" | "failed" | "skipped";
   externalId: string;
   error: string;
   latencyMs: number;
@@ -93,6 +96,23 @@ export async function attemptPublish(params: {
   mediaUrls: string[];
 }): Promise<PublishAttemptResult> {
   const { targetId, userId, connection, platform, content, mediaUrls } = params;
+
+  // Atomic publish claim: exactly one caller may attempt a pending target.
+  // Without this, a user-initiated retry (E7, which re-arms a failed
+  // target as "pending") racing an /internal/tick firing on the same
+  // (past-scheduledAt) job — or two overlapping ticks — would each call
+  // the connector and double-post. The guarded updateMany makes the
+  // loser's claim match zero rows; it reports "skipped" and touches
+  // nothing. (A crash between claim and outcome leaves the target visibly
+  // "publishing" — never silently double-posted; E14's live status view
+  // is where operator-grade recovery for that rare window belongs.)
+  const claim = await prisma.publishTarget.updateMany({
+    where: { id: targetId, status: "pending" },
+    data: { status: "publishing" },
+  });
+  if (claim.count === 0) {
+    return { status: "skipped", externalId: "", error: "", latencyMs: 0 };
+  }
 
   try {
     const hasCredentials = Boolean(connection.appPasswordEnc || connection.accessTokenEnc);

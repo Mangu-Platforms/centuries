@@ -119,7 +119,7 @@ export function Composer({
                 className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
                   r.status === "success"
                     ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-900 dark:bg-emerald-900/10"
-                    : r.status === "pending"
+                    : r.status === "pending" || r.status === "publishing"
                       ? "border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-900/10"
                       : "border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-900/10"
                 }`}
@@ -132,6 +132,8 @@ export function Composer({
                   <span className="badge-success">✓ Posted in {(r.latencyMs / 1000).toFixed(1)}s</span>
                 ) : r.status === "pending" ? (
                   <span className="badge-pending">Scheduled</span>
+                ) : r.status === "publishing" ? (
+                  <span className="badge-pending">Publishing…</span>
                 ) : (
                   <span className="badge-danger">✕ {r.error || "Failed"}</span>
                 )}

@@ -130,6 +130,19 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
         content,
         mediaUrls,
       });
+      if (outcome.status === "skipped") {
+        // A concurrent tick beat this request to a due-scheduled target's
+        // claim — report the row's actual current state, not "skipped".
+        const current = await prisma.publishTarget.findUniqueOrThrow({ where: { id: target.id } });
+        results.push({
+          platform,
+          status: current.status,
+          externalId: current.externalId,
+          error: current.error,
+          latencyMs: current.latencyMs,
+        });
+        continue;
+      }
       results.push({ platform, ...outcome });
     }
 
@@ -187,8 +200,7 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
         });
         if (claim.count === 0) continue;
 
-        retried++;
-        await attemptPublish({
+        const outcome = await attemptPublish({
           targetId: target.id,
           userId: request.user.sub,
           connection,
@@ -196,6 +208,7 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
           content: job.content,
           mediaUrls,
         });
+        if (outcome.status !== "skipped") retried++;
       }
 
       const { results } = await jobResponse(job.id);

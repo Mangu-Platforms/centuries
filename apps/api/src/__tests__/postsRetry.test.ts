@@ -205,6 +205,46 @@ describe("POST /api/posts/:id/retry (E7)", () => {
     await app.close();
   });
 
+  it("attemptPublish's claim makes a retry racing the tick worker publish exactly once", async () => {
+    const { attemptPublish } = await import("../lib/publish.js");
+    const app = await buildApp();
+    const { token, userId } = await registerUser(app);
+    await connectPlatform(app, token, "twitter", "retrytickrace");
+    const { jobId } = await publish(app, token, ["twitter"]);
+
+    // A pending target on a due job — the state both a user retry and a
+    // concurrent /internal/tick would see.
+    const target = await prisma.publishTarget.findFirstOrThrow({ where: { jobId } });
+    await prisma.publishTarget.update({
+      where: { id: target.id },
+      data: { status: "pending", externalId: "", error: "", latencyMs: 0 },
+    });
+    const connection = await prisma.connection.findFirstOrThrow({
+      where: { userId, platform: "twitter" },
+    });
+    const ownPostsBefore = await prisma.feedPost.count({ where: { userId, isOwn: true } });
+
+    const params = {
+      targetId: target.id,
+      userId,
+      connection,
+      platform: "twitter" as const,
+      content: "raced publish",
+      mediaUrls: [] as string[],
+    };
+    const [a, b] = await Promise.all([attemptPublish(params), attemptPublish(params)]);
+
+    // Exactly one caller wins the claim and publishes; the loser reports
+    // "skipped" and must not have touched the connector or the feed.
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual(["skipped", "success"]);
+    const ownPostsAfter = await prisma.feedPost.count({ where: { userId, isOwn: true } });
+    expect(ownPostsAfter).toBe(ownPostsBefore + 1);
+
+    await prisma.user.delete({ where: { id: userId } });
+    await app.close();
+  });
+
   it("is rate-limited", async () => {
     const app = await buildApp();
     const { token, userId } = await registerUser(app);
