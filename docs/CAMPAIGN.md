@@ -46,6 +46,46 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 5 continued (Phase F5: landing page copy fix)
+
+**Summary:** Picked **F5** next — Phase F3 just shipped and pushed, PR #6
+still open (draft, `mergeable_state: clean`), CI freshly triggered.
+Reviewed `apps/web/app/page.tsx` against the backlog's "no marketing
+rewrite" note: the page itself was already well-built, so this was a
+review pass for real gaps, not a redesign.
+
+**What shipped:** Found one concrete, genuine bug: the hero badge
+hardcoded `"Four networks, one command center"` and the sub-headline
+hand-listed `"Twitter, Threads, Bluesky, and Mastodon"` by name — both
+went silently stale when Instagram (Phase E5) brought the real platform
+count to five, since neither was derived from `PLATFORM_ORDER`. Same
+class of bug as E5's `DEMO_HANDLES` fix: a value duplicated by hand
+instead of computed from the single source of truth. Fixed both to
+derive from `PLATFORM_ORDER`/`PLATFORM_META` — a small number-word
+lookup (`NUMBER_WORDS`) for the badge, a comma-and-"and" `joinPlatformNames()`
+helper for the sentence — so a sixth platform addition can't leave this
+page's copy wrong again without a compile-time nudge to update it.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests, unaffected). Manual smoke test against a live
+dev server with a headless-browser screenshot: confirmed the badge now
+reads "Five networks, one command center" and the sub-headline lists all
+five platform names correctly, with no layout regression to the
+already-generic integrations grid below it.
+
+**Files touched:** `apps/web/app/page.tsx`, `docs/BACKLOG.md`,
+`docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open, commit, push. Phase F
+remaining: F1 (analytics — unblocked by live Bluesky/Mastodon connectors,
+needs scoping) and F2 (platform-mirrored bookmarks/likes — needs new
+connector-interface methods, bigger lift). Once those two land, Phase F
+is fully complete and Phase G (Postgres datasource, deploy docs,
+observability, security pass, OPERATOR.md) is the only phase left
+entirely untouched.
+
 ### 2026-08-27 — Session 5 (Phase F3: error toasts)
 
 **Summary:** PR #6 still open and green. Picked **F3**, the top TODO item
