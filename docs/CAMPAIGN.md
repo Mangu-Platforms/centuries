@@ -46,6 +46,61 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 6 (Phase F1: real analytics)
+
+**Summary:** PR #6 still open (draft, `mergeable_state: clean`, CI green on
+`b2c92e1`, no new comments beyond the two already-resolved CodeQL threads
+from E3). Picked **F1** — the only Phase F item left besides F2, and its
+backlog note ("depends on live connectors existing") is satisfied now that
+Bluesky and Mastodon have live connectors alongside the demo ones.
+
+**What shipped:** Checked what analytics already existed before building
+anything: `GET /api/dashboard` already returned one lifetime-aggregate
+cross-post success rate, but nothing broke it down per platform, nothing
+surfaced latency anywhere in aggregate form (only per-job, in publish
+history), and "feed volume" was a single lifetime count with no trend.
+New `GET /api/analytics` (`apps/api/src/routes/analytics.ts`): per-platform
+attempts/success/failure counts, success rate, and average latency
+computed from `PublishTarget` rows — latency averaged over *successful*
+attempts only, since a failed attempt's `latencyMs` is always 0
+(`lib/publish.ts` never times a failure) and mixing it in would understate
+real latency for a flaky platform. Also a 14-day feed-volume time series,
+bucketed by UTC calendar day and always including zero-count days so a
+real gap doesn't get silently compressed away. New web page
+`apps/web/app/dashboard/analytics/page.tsx` (added to the sidebar nav
+between Feed and Connections): a bar per platform with attempts/success-
+rate/latency, and a 14-bar volume chart.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all green
+(120/120 tests, 3 new in `analytics.test.ts` covering auth, per-platform
+math with mixed success/failure across two platforms, and day-bucketing
+including a genuinely empty day and a 30-day-old post correctly excluded
+from the 14-day window). Manual smoke test against a live server: reseeded
+the demo account, published two real posts through the composer (all 5
+demo connectors succeed, so this exercises the real success path with
+real per-platform latencies rather than synthetic data), and confirmed via
+a headless-browser screenshot that the analytics page renders correct
+per-platform success rates/latencies and a populated volume chart.
+Reseeded the demo account again afterward so the smoke-test posts don't
+linger as fixture data.
+
+**Files touched:** `apps/api/src/routes/analytics.ts` (new),
+`apps/api/src/app.ts`, `apps/api/src/__tests__/analytics.test.ts` (new),
+`apps/web/app/dashboard/analytics/page.tsx` (new),
+`apps/web/app/dashboard/layout.tsx`, `apps/web/lib/types.ts`,
+`apps/web/lib/api.ts`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open, commit, push. The only remaining
+Phase F item is **F2** (bookmarks/likes mirrored to platform where
+possible) — this needs new connector-interface methods (each connector
+would need a `like`/`bookmark` call, and the demo connectors would need to
+simulate success), a bigger lift than F1/F3/F5. Once F2 lands, Phase F is
+fully complete and Phase G (Postgres datasource, deploy docs,
+observability, security pass, OPERATOR.md) is the only phase left entirely
+untouched.
+
 ### 2026-08-27 — Session 5 continued (Phase F5: landing page copy fix)
 
 **Summary:** Picked **F5** next — Phase F3 just shipped and pushed, PR #6
