@@ -6,6 +6,8 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { config, PLATFORMS } from "./config.js";
 import { prisma } from "./db.js";
+import { reportError } from "./lib/errorReporting.js";
+import { recordRequest, renderMetrics } from "./lib/metrics.js";
 import { registerAuth } from "./plugins/auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { accountRecoveryRoutes } from "./routes/accountRecovery.js";
@@ -34,15 +36,49 @@ interface ApiErrorBody {
 }
 
 export async function buildApp(): Promise<FastifyInstance> {
+  // Defense in depth: nothing in this codebase currently logs a header or a
+  // request body (Fastify's default request/response logs are limited to
+  // method/url/host/remoteAddress/statusCode), so this redaction never
+  // actually fires today -- it guards against a future log call (a debug
+  // line, a new plugin) accidentally leaking a credential, rather than a
+  // known current leak.
+  const redact = {
+    paths: [
+      "req.headers.authorization",
+      "req.headers.cookie",
+      "*.password",
+      "*.currentPassword",
+      "*.newPassword",
+      "*.appPassword",
+      "*.token",
+      "*.accessToken",
+      "*.refreshToken",
+    ],
+    censor: "[redacted]",
+  };
+
   const app = Fastify({
     logger: config.isProd
-      ? true
-      : { transport: { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } } },
+      ? { redact }
+      : {
+          redact,
+          transport: { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } },
+        },
     genReqId: () => crypto.randomUUID(),
   });
 
   app.addHook("onRequest", async (request: FastifyRequest, reply: FastifyReply) => {
     reply.header("x-request-id", request.id);
+  });
+
+  // Phase G3: lightweight in-process request metrics (no prom-client
+  // dependency -- see lib/metrics.ts for why). request.routeOptions.url is
+  // the registered route *pattern* (e.g. "/api/posts/:id"), not the literal
+  // requested URL, so this can't blow up into unbounded label cardinality
+  // from real path params or garbage 404 paths.
+  app.addHook("onResponse", async (request: FastifyRequest, reply: FastifyReply) => {
+    const route = request.routeOptions.url ?? "unmatched";
+    recordRequest(request.method, route, reply.statusCode, reply.elapsedTime);
   });
 
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
@@ -79,7 +115,12 @@ export async function buildApp(): Promise<FastifyInstance> {
       requestId: request.id,
     };
     if (statusCode >= 500) {
-      request.log.error({ err, requestId: request.id }, "Unhandled error");
+      reportError(request.log, err, {
+        requestId: request.id,
+        method: request.method,
+        url: request.url,
+        statusCode,
+      });
     }
     void reply.code(statusCode).send(body);
   });
@@ -103,6 +144,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   });
   app.get("/api/platforms", async () => ({ platforms: Object.values(PLATFORMS) }));
+  app.get("/metrics", async (_request, reply) => {
+    reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8");
+    return renderMetrics();
+  });
 
   await app.register(authRoutes);
   await app.register(accountRecoveryRoutes);
