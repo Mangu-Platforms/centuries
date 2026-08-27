@@ -211,3 +211,19 @@ describe("Phase D1/D3: periodic sync + dedup", () => {
     expect(await prisma.feedPost.count({ where: { userId: user.id } })).toBe(countAfterFirst);
   });
 });
+
+describe("sync scheduler jitter (D7)", async () => {
+  const { nextSyncDelayMs } = await import("../lib/syncScheduler.js");
+
+  it("spreads delays uniformly within ±20% of the base interval", () => {
+    const base = 300_000;
+    expect(nextSyncDelayMs(base, 0.2, () => 0)).toBe(240_000); // min: -20%
+    expect(nextSyncDelayMs(base, 0.2, () => 1)).toBe(360_000); // max: +20%
+    expect(nextSyncDelayMs(base, 0.2, () => 0.5)).toBe(300_000); // midpoint: the base
+    for (let i = 0; i < 100; i++) {
+      const d = nextSyncDelayMs(base);
+      expect(d).toBeGreaterThanOrEqual(240_000);
+      expect(d).toBeLessThanOrEqual(360_000);
+    }
+  });
+});
