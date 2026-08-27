@@ -84,11 +84,45 @@ Back in Railway, set `CORS_ORIGIN` to your Vercel URL (e.g. `https://nexus-web.v
 
 ## Later: graduating from SQLite
 
-When you're ready for Postgres (Supabase or Railway's own):
-1. `apps/api/prisma/schema.prisma` → change `provider = "sqlite"` to `provider = "postgresql"`
-2. Set `DATABASE_URL` to the Postgres connection string
-3. Run `npm run -w @nexus/api prisma:generate`, commit, redeploy
-4. The volume can then be removed
+Postgres support (Phase G1) already exists on this branch — you don't need
+to hand-edit the schema. `apps/api/prisma/schema.prisma` (SQLite) stays the
+single source of truth for every model; `apps/api/prisma/schema.production.prisma`
+is a **generated** file (`npm run -w @nexus/api db:generate-prod-schema`)
+that's identical except for the datasource, so the two can never drift
+apart. Tracked migrations for Postgres live in `apps/api/prisma/migrations/`.
+
+When you're ready for Postgres (Supabase, Railway's own, or any Postgres 15+):
+
+1. Provision a Postgres database and get its connection string.
+2. Set `DATABASE_URL` on the Railway service to that connection string
+   (instead of `file:/data/nexus.db`).
+3. Change the service's **start command** from `prisma db push && node dist/server.js`
+   (or whatever `railway.json` currently runs) to:
+   ```
+   npm run -w @nexus/api db:migrate:deploy && node apps/api/dist/server.js
+   ```
+   `db:migrate:deploy` regenerates `schema.production.prisma` from
+   `schema.prisma` (so it can never be stale) and then runs
+   `prisma migrate deploy` — applies every pending tracked migration,
+   idempotently, the same command every deploy. Unlike `db push`, this
+   keeps a real migration history instead of silently diffing the live
+   schema on every boot.
+4. Redeploy. The volume can then be removed — Postgres is durable storage,
+   unlike SQLite-on-a-volume.
+
+**Authoring a new migration** (only needed when you change a model in
+`schema.prisma`): with a real Postgres reachable locally (e.g. `docker run
+-p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16`), run
+`DATABASE_URL=postgresql://... npm run -w @nexus/api db:migrate:dev` —
+this regenerates the production schema, diffs it against the target
+database, and writes a new timestamped folder under
+`apps/api/prisma/migrations/`. Commit the new migration folder alongside
+the `schema.prisma` change that prompted it. Verified end-to-end in this
+session against a real local PostgreSQL 16 instance: generated the initial
+migration, applied it via `migrate deploy` to a fresh empty database, and
+ran the full 127-test suite (and a live server smoke test — login, feed,
+analytics, like) against it with no code changes needed anywhere outside
+`prisma/`.
 
 ## Next after deploy (from the handoff doc)
 
