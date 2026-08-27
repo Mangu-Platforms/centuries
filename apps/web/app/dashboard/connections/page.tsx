@@ -50,6 +50,7 @@ function ConnectionsPageInner() {
   // credential-less (demo-mode) connections reconnect directly.
   const [dialog, setDialog] = useState<{ kind: "disconnect" | "reconnect"; connection: Connection } | null>(null);
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
+  const listHeadingRef = useRef<HTMLHeadingElement>(null);
   const { showToast } = useToast();
 
   const load = () =>
@@ -58,15 +59,32 @@ function ConnectionsPageInner() {
     load();
   }, []);
 
+  // Returning via the browser Back button from an abandoned OAuth redirect
+  // typically restores this page from the bfcache with its old state —
+  // including a stuck "Reconnecting…"/"Redirecting…" busy flag. Clear both.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) {
+        setReconnectingId(null);
+        setBusy(false);
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   // Returning from the Mastodon OAuth redirect (routes/mastodonAuth.ts sends
   // the browser back here with these query params) — surface the result
   // once, then strip them from the URL so a refresh doesn't re-show it.
   useEffect(() => {
     const connected = searchParams.get("mastodonConnected");
     const imported = searchParams.get("imported");
+    const reconnected = searchParams.get("reconnected");
     const mastodonError = searchParams.get("mastodonError");
     if (connected) {
-      setMessage(`Connected Mastodon! Imported ${imported ?? 0} posts.`);
+      setMessage(
+        `${reconnected ? "Reconnected" : "Connected"} Mastodon! Imported ${imported ?? 0} posts.`,
+      );
       setError(null);
       load();
       router.replace("/dashboard/connections");
@@ -132,6 +150,7 @@ function ConnectionsPageInner() {
   // app-password platforms = re-prompt the credential (modal); for
   // credential-less demo-mode connections = just re-fetch the timeline.
   const startReconnect = async (c: Connection) => {
+    if (reconnectingId) return; // one reconnect at a time; button is aria-disabled, not disabled, so guard here
     if (c.platform === "mastodon" && c.instance) {
       setReconnectingId(c.id);
       try {
@@ -154,6 +173,7 @@ function ConnectionsPageInner() {
     setReconnectingId(id);
     setMessage(null);
     setWarning(null);
+    setError(null);
     try {
       const res = await api.reconnect(id, newCredential);
       if (res.warning) {
@@ -291,7 +311,7 @@ function ConnectionsPageInner() {
       </section>
 
       <section className="card p-5 sm:p-6">
-        <h2 className="mb-4 font-bold text-slate-900 dark:text-white">
+        <h2 ref={listHeadingRef} tabIndex={-1} className="mb-4 font-bold text-slate-900 outline-none dark:text-white">
           Your connections{" "}
           <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
             {connections.length}
@@ -330,8 +350,14 @@ function ConnectionsPageInner() {
                       </span>
                       <button
                         onClick={() => startReconnect(c)}
-                        disabled={reconnectingId === c.id}
-                        className="btn-ghost px-2.5 py-1.5 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                        // aria-disabled (with a guard in startReconnect) instead
+                        // of disabled: a disabled element can't receive the
+                        // dialog's focus restore, silently dropping keyboard
+                        // focus to <body> after a confirmed reconnect.
+                        aria-disabled={reconnectingId === c.id}
+                        className={`btn-ghost px-2.5 py-1.5 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 ${
+                          reconnectingId === c.id ? "cursor-not-allowed opacity-50" : ""
+                        }`}
                       >
                         {reconnectingId === c.id ? "Reconnecting…" : "Reconnect"}
                       </button>
@@ -366,6 +392,10 @@ function ConnectionsPageInner() {
             const id = dialog.connection.id;
             setDialog(null);
             await disconnect(id);
+            // The dialog's focus-restore target (the row's Disconnect
+            // button) unmounts with the row — land focus on the list
+            // heading instead of letting it fall to <body>.
+            listHeadingRef.current?.focus();
           }}
         />
       )}
@@ -427,7 +457,13 @@ function ConnectionDialog(props: {
         if (items.length === 0) return;
         const first = items[0];
         const last = items[items.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
+        // Clicking non-interactive dialog text drops DOM focus to <body>;
+        // without this containment branch the next Tab would walk into the
+        // obscured page behind the backdrop despite aria-modal.
+        if (!panel?.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && document.activeElement === first) {
           e.preventDefault();
           last.focus();
         } else if (!e.shiftKey && document.activeElement === last) {
@@ -456,7 +492,8 @@ function ConnectionDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="card animate-fade-up w-full max-w-md p-6"
+        tabIndex={-1}
+        className="card animate-fade-up w-full max-w-md p-6 outline-none"
       >
         <h2 id={titleId} className="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">
           {title}

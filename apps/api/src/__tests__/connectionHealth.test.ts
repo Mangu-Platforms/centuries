@@ -278,6 +278,140 @@ describe("connection health (C6 + C1b)", () => {
       await app.close();
     });
 
+    it("preserves the previously stored credential when the new one fails validation", async () => {
+      // Initial connect with a good password …
+      loginMock.mockResolvedValueOnce({});
+      getTimelineMock.mockResolvedValueOnce(LIVE_TIMELINE);
+
+      const app = await buildApp();
+      const { token, userId } = await registerUser(app);
+
+      const connectRes = await app.inject({
+        method: "POST",
+        url: "/api/connections",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { platform: "bluesky", handle: "keepcred.bsky.social", credential: "good-password" },
+      });
+      const connectionId = connectRes.json().connection.id as string;
+      expect(connectRes.json().connection.status).toBe("active");
+      const storedBefore = (await prisma.connection.findUniqueOrThrow({ where: { id: connectionId } })).appPasswordEnc;
+
+      // … a reconnect with a mistyped password fails validation.
+      loginMock.mockRejectedValue(new Error("Invalid identifier or password"));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/connections/${connectionId}/reconnect`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { credential: "mistyped-password" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().warning).toMatch(/Invalid identifier or password/);
+
+      // The known-good stored credential must be untouched — validation
+      // failure must never destroy it (it was validated with the candidate,
+      // never persisted).
+      const stored = await prisma.connection.findUniqueOrThrow({ where: { id: connectionId } });
+      expect(stored.appPasswordEnc).toBe(storedBefore);
+      expect(decryptSecret(stored.appPasswordEnc)).toBe("good-password");
+      expect(loginMock).toHaveBeenLastCalledWith({ identifier: "keepcred.bsky.social", password: "mistyped-password" });
+
+      await prisma.user.delete({ where: { id: userId } });
+      await app.close();
+    });
+
+    it("resolves the live connector (not demo) for a connection holding an OAuth token", async () => {
+      const { registerLiveConnector } = await import("../connectors/registry.js");
+      const { MastodonConnector } = await import("../connectors/mastodon.js");
+      const { encryptSecret } = await import("../lib/crypto.js");
+
+      const fetchSpy = vi.fn().mockResolvedValue([]);
+      registerLiveConnector("mastodon", () => ({
+        platform: "mastodon" as const,
+        fetchTimeline: fetchSpy,
+        publish: vi.fn(),
+      }));
+
+      try {
+        const app = await buildApp();
+        const { token, userId } = await registerUser(app);
+
+        const connection = await prisma.connection.create({
+          data: {
+            userId,
+            platform: "mastodon",
+            handle: "@real@mastodon.example",
+            displayName: "Real",
+            instance: "mastodon.example",
+            status: "error",
+            lastError: "token revoked",
+            accessTokenEnc: encryptSecret("live-oauth-token"),
+          },
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/connections/${connection.id}/reconnect`,
+          headers: { authorization: `Bearer ${token}` },
+          payload: {},
+        });
+
+        expect(res.statusCode).toBe(200);
+        // The live connector was resolved (registry saw hasCredentials=true
+        // from accessTokenEnc) and received the decrypted token + instance —
+        // if this wiring regressed to the demo connector, the API would
+        // report a healed connection without ever exercising the real token.
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const ctx = fetchSpy.mock.calls[0][0];
+        expect(ctx.accessToken).toBe("live-oauth-token");
+        expect(ctx.instance).toBe("mastodon.example");
+        expect(res.json().connection.status).toBe("active");
+
+        await prisma.user.delete({ where: { id: userId } });
+        await app.close();
+      } finally {
+        // Restore the real live connector for subsequent tests — the
+        // registry map is module-global.
+        registerLiveConnector("mastodon", () => new MastodonConnector());
+      }
+    });
+
+    it("is rate-limited: a 6th call within a minute gets a 429", async () => {
+      const app = await buildApp();
+      const { token, userId } = await registerUser(app);
+
+      const connectRes = await app.inject({
+        method: "POST",
+        url: "/api/connections",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { platform: "threads", handle: "ratelimited" },
+      });
+      const connectionId = connectRes.json().connection.id as string;
+
+      // The route triggers an outbound live login attempt when credentials
+      // are present, so it must be bounded like the Mastodon register route
+      // — otherwise it's a free credential-testing oracle.
+      for (let i = 0; i < 5; i++) {
+        const ok = await app.inject({
+          method: "POST",
+          url: `/api/connections/${connectionId}/reconnect`,
+          headers: { authorization: `Bearer ${token}` },
+          payload: {},
+        });
+        expect(ok.statusCode).toBe(200);
+      }
+      const limited = await app.inject({
+        method: "POST",
+        url: `/api/connections/${connectionId}/reconnect`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: {},
+      });
+      expect(limited.statusCode).toBe(429);
+
+      await prisma.user.delete({ where: { id: userId } });
+      await app.close();
+    });
+
     it("re-fetches a credential-less (demo) connection without requiring a credential", async () => {
       const app = await buildApp();
       const { token, userId } = await registerUser(app);

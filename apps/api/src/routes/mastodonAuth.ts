@@ -147,25 +147,40 @@ export async function mastodonAuthRoutes(app: FastifyInstance): Promise<void> {
       const acct = account.acct.includes("@") ? account.acct : `${account.username}@${host}`;
       const handle = "@" + acct;
 
+      // An already-connected handle is a reconnect (Phase C6), not an
+      // error: the user deliberately re-ran the OAuth flow (e.g. after
+      // revoking NEXUS on the instance), so the fresh token replaces the
+      // stale one and the connection heals. Discarding the new token here
+      // would make Mastodon — the one platform whose reconnect requires
+      // re-authorization — permanently unreconnectable.
       const existing = await prisma.connection.findUnique({
         where: { userId_platform_handle: { userId: state.userId, platform: "mastodon", handle } },
       });
-      if (existing) {
-        return reply.redirect(connectionsPageUrl({ mastodonError: "That Mastodon account is already connected" }));
-      }
 
-      const connection = await prisma.connection.create({
-        data: {
-          userId: state.userId,
-          platform: "mastodon",
-          handle,
-          displayName: account.displayName || account.username,
-          instance: host,
-          status: "active",
-          accessTokenEnc: encryptSecret(token.accessToken),
-          scopes: token.scope,
-        },
-      });
+      const connection = existing
+        ? await prisma.connection.update({
+            where: { id: existing.id },
+            data: {
+              displayName: account.displayName || account.username,
+              instance: host,
+              status: "active",
+              lastError: "",
+              accessTokenEnc: encryptSecret(token.accessToken),
+              scopes: token.scope,
+            },
+          })
+        : await prisma.connection.create({
+            data: {
+              userId: state.userId,
+              platform: "mastodon",
+              handle,
+              displayName: account.displayName || account.username,
+              instance: host,
+              status: "active",
+              accessTokenEnc: encryptSecret(token.accessToken),
+              scopes: token.scope,
+            },
+          });
 
       const { importedPosts } = await importInitialTimeline({
         userId: state.userId,
@@ -175,7 +190,13 @@ export async function mastodonAuthRoutes(app: FastifyInstance): Promise<void> {
         ctx: { handle, instance: host, accessToken: token.accessToken },
       });
 
-      return reply.redirect(connectionsPageUrl({ mastodonConnected: "1", imported: String(importedPosts) }));
+      return reply.redirect(
+        connectionsPageUrl({
+          mastodonConnected: "1",
+          imported: String(importedPosts),
+          ...(existing ? { reconnected: "1" } : {}),
+        }),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to complete Mastodon authorization";
       return reply.redirect(connectionsPageUrl({ mastodonError: message }));

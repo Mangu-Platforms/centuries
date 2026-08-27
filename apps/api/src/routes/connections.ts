@@ -131,46 +131,64 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
   // a reconnect here without a credential simply re-runs the timeline fetch
   // with whatever the connection already has — which is also the demo-mode
   // path. Success heals status/lastError and stamps lastSyncedAt.
-  app.post("/api/connections/:id/reconnect", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const parsed = z.object({ credential: z.string().max(500).optional() }).safeParse(request.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0].message });
+  app.post(
+    "/api/connections/:id/reconnect",
+    // Rate-limited ahead of auth, same reasoning as the Mastodon register
+    // route: a reconnect carrying a candidate credential triggers an
+    // outbound live login attempt against a third-party platform and
+    // reports its verdict, so left unbounded this route is a free
+    // credential-testing oracle. 5/min matches the register route.
+    { preHandler: [app.rateLimit({ max: 5, timeWindow: "1 minute" }), app.authenticate] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const parsed = z.object({ credential: z.string().max(500).optional() }).safeParse(request.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0].message });
 
-    const connection = await prisma.connection.findFirst({ where: { id, userId: request.user.sub } });
-    if (!connection) return reply.code(404).send({ error: "Connection not found" });
-    if (!isPlatform(connection.platform)) return reply.code(400).send({ error: "Unsupported platform" });
-    const platform = connection.platform;
+      const connection = await prisma.connection.findFirst({ where: { id, userId: request.user.sub } });
+      if (!connection) return reply.code(404).send({ error: "Connection not found" });
+      if (!isPlatform(connection.platform)) return reply.code(400).send({ error: "Unsupported platform" });
+      const platform = connection.platform;
 
-    let appPasswordEnc = connection.appPasswordEnc;
-    if (PLATFORMS[platform].auth === "app_password" && parsed.data.credential) {
-      appPasswordEnc = encryptSecret(parsed.data.credential);
-      await prisma.connection.update({ where: { id }, data: { appPasswordEnc } });
-    }
+      // A candidate credential is validated by actually fetching with it
+      // BEFORE it is persisted — a failed reconnect must never destroy a
+      // possibly-still-valid stored credential.
+      const candidate =
+        PLATFORMS[platform].auth === "app_password" && parsed.data.credential ? parsed.data.credential : undefined;
+      const appPassword =
+        candidate ?? (connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined);
 
-    const hasCredentials = Boolean(appPasswordEnc || connection.accessTokenEnc);
-    const connector = getConnector(platform, hasCredentials);
+      const hasCredentials = Boolean(appPassword || connection.accessTokenEnc);
+      const connector = getConnector(platform, hasCredentials);
 
-    const { importedPosts, warning } = await importInitialTimeline({
-      userId: request.user.sub,
-      connectionId: connection.id,
-      platform,
-      connector,
-      ctx: {
-        handle: connection.handle,
-        instance: connection.instance || undefined,
-        appPassword: appPasswordEnc ? decryptSecret(appPasswordEnc) : undefined,
-        accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
-      },
-    });
+      const { importedPosts, warning } = await importInitialTimeline({
+        userId: request.user.sub,
+        connectionId: connection.id,
+        platform,
+        connector,
+        ctx: {
+          handle: connection.handle,
+          instance: connection.instance || undefined,
+          appPassword,
+          accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+        },
+      });
 
-    const fresh = await prisma.connection.findUniqueOrThrow({ where: { id: connection.id } });
+      if (candidate && !warning) {
+        await prisma.connection.update({
+          where: { id: connection.id },
+          data: { appPasswordEnc: encryptSecret(candidate) },
+        });
+      }
 
-    return reply.send({
-      connection: publicConnection(fresh),
-      importedPosts,
-      ...(warning ? { warning } : {}),
-    });
-  });
+      const fresh = await prisma.connection.findUniqueOrThrow({ where: { id: connection.id } });
+
+      return reply.send({
+        connection: publicConnection(fresh),
+        importedPosts,
+        ...(warning ? { warning } : {}),
+      });
+    },
+  );
 
   app.delete("/api/connections/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
