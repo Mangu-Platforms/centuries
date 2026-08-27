@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "./db.js";
-import { PLATFORM_IDS } from "./config.js";
+import { PLATFORM_IDS, type PlatformId } from "./config.js";
 import { getConnector } from "./connectors/registry.js";
 
 // Seeds a ready-to-explore demo account:
@@ -9,11 +9,16 @@ import { getConnector } from "./connectors/registry.js";
 const DEMO_EMAIL = "demo@nexus.app";
 const DEMO_PASSWORD = "password123";
 
-const DEMO_HANDLES: Record<string, string> = {
+// Typed against PlatformId (not just `string`) so adding a new platform to
+// PLATFORMS without a matching entry here is a compile error, not a
+// runtime crash on the `handle` field — found the hard way while adding
+// Instagram (Phase E5).
+const DEMO_HANDLES: Record<PlatformId, string> = {
   twitter: "@birdman",
   threads: "@birdman",
   bluesky: "@birdman.bsky.social",
   mastodon: "@birdman@mastodon.social",
+  instagram: "@birdman",
 };
 
 async function main(): Promise<void> {

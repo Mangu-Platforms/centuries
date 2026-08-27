@@ -1,4 +1,4 @@
-export type PlatformId = "twitter" | "threads" | "bluesky" | "mastodon";
+export type PlatformId = "twitter" | "threads" | "bluesky" | "mastodon" | "instagram";
 
 export interface User {
   id: string;
