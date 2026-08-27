@@ -37,8 +37,12 @@ export async function syncConnection(connection: Connection): Promise<{ imported
   try {
     remote = await connector.fetchTimeline(ctx, SYNC_FETCH_LIMIT);
   } catch (err) {
-    await prisma.connection.update({ where: { id: connection.id }, data: { status: "error" } });
-    return { imported: 0, error: err instanceof Error ? err.message : "Sync failed" };
+    const message = err instanceof Error ? err.message : "Sync failed";
+    await prisma.connection.update({
+      where: { id: connection.id },
+      data: { status: "error", lastError: message },
+    });
+    return { imported: 0, error: message };
   }
 
   const { newCount } = await importTimelinePosts({
@@ -48,9 +52,12 @@ export async function syncConnection(connection: Connection): Promise<{ imported
     posts: remote,
   });
 
-  if (connection.status === "error") {
-    await prisma.connection.update({ where: { id: connection.id }, data: { status: "active" } });
-  }
+  // Stamp the health fields (Phase C6) on every successful sync; this also
+  // self-heals a connection that was in "error" from a previous failure.
+  await prisma.connection.update({
+    where: { id: connection.id },
+    data: { status: "active", lastSyncedAt: new Date(), lastError: "" },
+  });
 
   return { imported: newCount };
 }
