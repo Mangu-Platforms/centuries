@@ -110,6 +110,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
         instance,
         appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
         accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+        connectionId: connection.id,
       },
     });
 
@@ -170,6 +171,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
           instance: connection.instance || undefined,
           appPassword,
           accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+          connectionId: connection.id,
         },
       });
 

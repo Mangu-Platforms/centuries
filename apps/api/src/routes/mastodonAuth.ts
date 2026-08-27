@@ -187,7 +187,7 @@ export async function mastodonAuthRoutes(app: FastifyInstance): Promise<void> {
         connectionId: connection.id,
         platform: "mastodon",
         connector: getConnector("mastodon", true),
-        ctx: { handle, instance: host, accessToken: token.accessToken },
+        ctx: { handle, instance: host, accessToken: token.accessToken, connectionId: connection.id },
       });
 
       return reply.redirect(

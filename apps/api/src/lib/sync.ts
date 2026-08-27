@@ -31,6 +31,7 @@ export async function syncConnection(connection: Connection): Promise<{ imported
     instance: connection.instance || undefined,
     appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
     accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+    connectionId: connection.id,
   };
 
   // Both health stamps below use updateMany guarded on the updatedAt value

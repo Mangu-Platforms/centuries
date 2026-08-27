@@ -102,6 +102,7 @@ export async function attemptPublish(params: {
         instance: connection.instance,
         appPassword: connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined,
         accessToken: connection.accessTokenEnc ? decryptSecret(connection.accessTokenEnc) : undefined,
+        connectionId: connection.id,
       },
       content,
       mediaUrls,
