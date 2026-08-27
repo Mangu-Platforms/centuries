@@ -1,4 +1,5 @@
 import type {
+  AnalyticsData,
   Connection,
   DashboardData,
   FeedPost,
@@ -217,4 +218,6 @@ export const api = {
   history: () => request<{ jobs: PublishHistoryItem[] }>("/api/posts/history"),
 
   dashboard: () => request<DashboardData>("/api/dashboard"),
+
+  analytics: () => request<AnalyticsData>("/api/analytics"),
 };

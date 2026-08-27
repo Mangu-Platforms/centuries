@@ -70,6 +70,20 @@ export interface PublishHistoryItem {
   targets: Array<{ platform: PlatformId; status: string; latencyMs: number; error: string }>;
 }
 
+export interface AnalyticsData {
+  perPlatform: Array<{
+    platform: PlatformId;
+    name: string;
+    color: string;
+    attempts: number;
+    successCount: number;
+    failedCount: number;
+    successRate: number;
+    avgLatencyMs: number;
+  }>;
+  feedVolume: Array<{ date: string; count: number }>;
+}
+
 export interface DashboardData {
   connections: Connection[];
   stats: {
