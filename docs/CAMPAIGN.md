@@ -46,6 +46,32 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7, part 5 (E8: schedule UI + Planner v0; E7 hardening)
+
+**E7 hardening first:** while writing E7's review brief I spotted a real
+double-post window my own atomic claim didn't cover — a retry-armed
+`pending` target on a past-`scheduledAt` job could be claimed
+concurrently by `/internal/tick` (and two overlapping ticks always had
+this window). Fixed at the root: `attemptPublish` itself now takes an
+atomic `pending → publishing` claim before touching any connector; the
+loser reports `skipped` and touches nothing (tick counts it as neither
+outcome, the immediate path reports the row's real state, retry doesn't
+count it). Regression test: two concurrent `attemptPublish` calls on one
+pending target → exactly one success + one skipped + one feed post.
+Web renders the transient `publishing` state as an amber badge.
+
+**E8 shipped (tests first, 6/7 observed red):** see the backlog note —
+composer Schedule toggle + Undo strip, Planner v0 page with inline
+edit/cancel, `DELETE`/`PATCH /api/posts/:id` gated on
+all-pending + strictly-future `scheduledAt` (the future-only rule is
+what makes cancel/edit race-free against the tick without locks).
+
+**Commands run (all green):** lint · **23 files / 176 tests** (7+1 new)
+· build · live walkthrough with screenshots: scheduled via the
+composer → Undo returned the draft → re-scheduled → planner lists it →
+inline edit saved → DB-backdated → `/internal/tick` (dev secret) fired
+it → 5/5 targets published → history green, planner empty. DB reseeded.
+
 ### 2026-08-27 — Session 7, part 4 (E7: per-target retry + a latent app-wide bug)
 
 **Summary:** E7 per the strategy slice order — `POST /api/posts/:id/retry`
