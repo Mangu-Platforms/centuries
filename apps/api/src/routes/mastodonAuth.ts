@@ -6,6 +6,7 @@ import { config } from "../config.js";
 import { normalizeInstanceUrl } from "../connectors/mastodon.js";
 import { getConnector } from "../connectors/registry.js";
 import { decryptSecret, encryptSecret } from "../lib/crypto.js";
+import { INTERACTIVE_RESILIENCE, resetBreaker } from "../lib/resilience.js";
 import { importInitialTimeline } from "../lib/timelineImport.js";
 
 // Mastodon's OAuth 2.0 authorization-code flow against a user-supplied
@@ -182,11 +183,16 @@ export async function mastodonAuthRoutes(app: FastifyInstance): Promise<void> {
             },
           });
 
+      // A completed OAuth re-authorization is user-initiated verification
+      // with a brand-new token — clear any open breaker (same reasoning as
+      // the reconnect route) before the initial fetch.
+      resetBreaker(connection.id);
+
       const { importedPosts } = await importInitialTimeline({
         userId: state.userId,
         connectionId: connection.id,
         platform: "mastodon",
-        connector: getConnector("mastodon", true),
+        connector: getConnector("mastodon", true, INTERACTIVE_RESILIENCE),
         ctx: { handle, instance: host, accessToken: token.accessToken, connectionId: connection.id },
       });
 

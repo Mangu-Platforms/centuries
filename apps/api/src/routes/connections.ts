@@ -4,6 +4,7 @@ import { prisma } from "../db.js";
 import { PLATFORMS, isPlatform } from "../config.js";
 import { getConnector } from "../connectors/registry.js";
 import { decryptSecret, encryptSecret } from "../lib/crypto.js";
+import { INTERACTIVE_RESILIENCE, resetBreaker } from "../lib/resilience.js";
 import { importInitialTimeline } from "../lib/timelineImport.js";
 
 const connectSchema = z.object({
@@ -98,7 +99,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     // always resolves to the demo connector (Phase C fills these in one
     // platform at a time; see connectors/registry.ts).
     const hasCredentials = Boolean(connection.appPasswordEnc || connection.accessTokenEnc);
-    const connector = getConnector(platform, hasCredentials);
+    const connector = getConnector(platform, hasCredentials, INTERACTIVE_RESILIENCE);
 
     const { importedPosts, warning } = await importInitialTimeline({
       userId: request.user.sub,
@@ -150,6 +151,11 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
       if (!isPlatform(connection.platform)) return reply.code(400).send({ error: "Unsupported platform" });
       const platform = connection.platform;
 
+      // A user-initiated reconnect IS the half-open probe: clear any open
+      // breaker so a corrected credential is never rejected unseen by the
+      // fail-fast path (this route is rate-limited, so abuse stays bounded).
+      resetBreaker(connection.id);
+
       // A candidate credential is validated by actually fetching with it
       // BEFORE it is persisted — a failed reconnect must never destroy a
       // possibly-still-valid stored credential.
@@ -159,7 +165,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
         candidate ?? (connection.appPasswordEnc ? decryptSecret(connection.appPasswordEnc) : undefined);
 
       const hasCredentials = Boolean(appPassword || connection.accessTokenEnc);
-      const connector = getConnector(platform, hasCredentials);
+      const connector = getConnector(platform, hasCredentials, INTERACTIVE_RESILIENCE);
 
       const { importedPosts, warning } = await importInitialTimeline({
         userId: request.user.sub,
@@ -200,6 +206,9 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     if (!connection) return reply.code(404).send({ error: "Connection not found" });
 
     await prisma.connection.delete({ where: { id } });
+    // The id never comes back — drop its breaker state so the in-process
+    // Map stays bounded by live connections.
+    resetBreaker(id);
     return reply.send({ ok: true });
   });
 }

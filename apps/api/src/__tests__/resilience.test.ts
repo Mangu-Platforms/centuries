@@ -305,6 +305,209 @@ describe("resilience wrapper (C5)", () => {
     });
   });
 
+  describe("real-world error shapes and budgets", () => {
+    it("retries an @atproto-style network error (status=1 wrapper, coded cause two levels down)", async () => {
+      // XRPCError.from() wraps undici's TypeError("fetch failed") — whose
+      // own cause carries the coded network error — and stamps status=1
+      // ("Unknown"). status 1 is not an HTTP verdict and must not make the
+      // error look non-transient.
+      const coded = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+      const fetchFailed = new TypeError("fetch failed");
+      (fetchFailed as TypeError & { cause: unknown }).cause = coded;
+      const xrpcStyle = Object.assign(new Error("Unable to connect"), { status: 1, cause: fetchFailed });
+
+      const inner = fakeConnector();
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockRejectedValueOnce(xrpcStyle).mockResolvedValueOnce([POST]);
+
+      const wrapped = wrapConnector(inner, FAST);
+      await expect(wrapped.fetchTimeline(ctxFor(crypto.randomUUID()), 10)).resolves.toHaveLength(1);
+      expect(inner.fetchTimeline).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails immediately (no doomed retry) when Retry-After exceeds the backoff cap", async () => {
+      const err = statusError(429, "Rate limited") as Error & { headers?: Record<string, string> };
+      err.headers = { "retry-after": "300" }; // 5 minutes — far beyond any budget
+      const inner = fakeConnector();
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockRejectedValue(err);
+      (inner.publish as ReturnType<typeof vi.fn>).mockRejectedValue(err);
+
+      const wrapped = wrapConnector(inner, FAST);
+      await expect(wrapped.fetchTimeline(ctxFor(crypto.randomUUID()), 10)).rejects.toThrow(/Rate limited/);
+      expect(inner.fetchTimeline).toHaveBeenCalledTimes(1);
+      await expect(wrapped.publish(ctxFor(crypto.randomUUID()), "hi", [])).rejects.toThrow(/Rate limited/);
+      expect(inner.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it("finds a Retry-After buried in the error's cause chain", async () => {
+      const responseErr = Object.assign(new Error("Too Many Requests"), {
+        statusCode: 429,
+        headers: { "retry-after": "0" },
+      });
+      const sdkWrapper = Object.assign(new Error("Request failed"), { status: 429, cause: responseErr });
+      const inner = fakeConnector();
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockRejectedValueOnce(sdkWrapper).mockResolvedValueOnce([POST]);
+
+      const wrapped = wrapConnector(inner, FAST);
+      await expect(wrapped.fetchTimeline(ctxFor(crypto.randomUUID()), 10)).resolves.toHaveLength(1);
+      expect(inner.fetchTimeline).toHaveBeenCalledTimes(2);
+    });
+
+    it("bounds a hung connector call with the attempt timeout and retries it as transient", async () => {
+      const inner = fakeConnector();
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>)
+        .mockImplementationOnce(() => new Promise(() => {})) // never settles
+        .mockResolvedValueOnce([POST]);
+
+      const wrapped = wrapConnector(inner, { ...FAST, attemptTimeoutMs: 40 });
+      await expect(wrapped.fetchTimeline(ctxFor(crypto.randomUUID()), 10)).resolves.toHaveLength(1);
+      expect(inner.fetchTimeline).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports a 429-retried publish's latency wall-clock across both attempts and the sleep", async () => {
+      const err = statusError(429) as Error & { headers?: Record<string, string> };
+      const inner = fakeConnector();
+      (inner.publish as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(err)
+        .mockResolvedValueOnce({ externalId: "p3", latencyMs: 1 });
+
+      const wrapped = wrapConnector(inner, { backoffBaseMs: 60, backoffCapMs: 80 });
+      const res = await wrapped.publish(ctxFor(crypto.randomUUID()), "hi", []);
+      expect(res.externalId).toBe("p3");
+      // The inner connector claimed 1ms; the user actually waited through
+      // attempt 1 + a ≥30ms backoff sleep + attempt 2. NF03 analytics must
+      // see the real number.
+      expect(res.latencyMs).toBeGreaterThanOrEqual(25);
+    });
+  });
+
+  describe("hardened breaker semantics", () => {
+    it("keeps failing fast for concurrent callers while a half-open probe is in flight", async () => {
+      let releaseProbe!: (v: unknown) => void;
+      const probeGate = new Promise((r) => (releaseProbe = r));
+      const inner = fakeConnector();
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(statusError(400, "down"))
+        .mockImplementationOnce(async () => {
+          await probeGate;
+          return [POST];
+        });
+
+      const wrapped = wrapConnector(inner, { ...FAST, breakerFailureThreshold: 1, breakerOpenMs: 20 });
+      const ctx = ctxFor(crypto.randomUUID());
+
+      await expect(wrapped.fetchTimeline(ctx, 10)).rejects.toThrow(/down/); // opens
+      await new Promise((r) => setTimeout(r, 30)); // past cooldown
+
+      const probe = wrapped.fetchTimeline(ctx, 10); // elected probe, blocks on the gate
+      await new Promise((r) => setTimeout(r, 5));
+      // A second caller during the probe must NOT reach the platform.
+      await expect(wrapped.fetchTimeline(ctx, 10)).rejects.toThrow(/paused/i);
+      expect(inner.fetchTimeline).toHaveBeenCalledTimes(2); // 1 failure + 1 in-flight probe
+
+      releaseProbe(null);
+      await expect(probe).resolves.toHaveLength(1);
+      // Probe success closed the breaker.
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockResolvedValueOnce([POST]);
+      await expect(wrapped.fetchTimeline(ctx, 10)).resolves.toHaveLength(1);
+    });
+
+    it("a half-open probe is a single attempt — no retry budget against a host believed down", async () => {
+      const inner = fakeConnector();
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockRejectedValue(statusError(503, "still down"));
+
+      const wrapped = wrapConnector(inner, {
+        ...FAST,
+        maxFetchAttempts: 3,
+        breakerFailureThreshold: 1,
+        breakerOpenMs: 20,
+      });
+      const ctx = ctxFor(crypto.randomUUID());
+
+      await expect(wrapped.fetchTimeline(ctx, 10)).rejects.toThrow(/still down/);
+      const callsAfterOpen = (inner.fetchTimeline as ReturnType<typeof vi.fn>).mock.calls.length;
+      await new Promise((r) => setTimeout(r, 30));
+      await expect(wrapped.fetchTimeline(ctx, 10)).rejects.toThrow(/still down/); // the probe
+      // Exactly ONE more connector call — the probe didn't run the 3-attempt loop.
+      expect((inner.fetchTimeline as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterOpen + 1);
+    });
+
+    it("breaker state survives across independently wrapped instances (module-scoped, keyed by connectionId)", async () => {
+      const failing = () => {
+        const c = fakeConnector();
+        (c.fetchTimeline as ReturnType<typeof vi.fn>).mockRejectedValue(statusError(400, "down"));
+        return c;
+      };
+      const id = crypto.randomUUID();
+      const optsShared = { ...FAST, breakerFailureThreshold: 2, breakerOpenMs: 60_000 };
+
+      await expect(wrapConnector(failing(), optsShared).fetchTimeline(ctxFor(id), 10)).rejects.toThrow(/down/);
+      await expect(wrapConnector(failing(), optsShared).fetchTimeline(ctxFor(id), 10)).rejects.toThrow(/down/);
+
+      const third = failing();
+      await expect(wrapConnector(third, optsShared).fetchTimeline(ctxFor(id), 10)).rejects.toThrow(/paused/i);
+      expect(third.fetchTimeline).not.toHaveBeenCalled();
+    });
+
+    it("resetBreaker clears an open breaker so a user-initiated verification goes through", async () => {
+      const { resetBreaker } = await import("../lib/resilience.js");
+      const inner = fakeConnector();
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockRejectedValue(statusError(400, "down"));
+
+      const wrapped = wrapConnector(inner, { ...FAST, breakerFailureThreshold: 1, breakerOpenMs: 60_000 });
+      const id = crypto.randomUUID();
+      await expect(wrapped.fetchTimeline(ctxFor(id), 10)).rejects.toThrow(/down/);
+      await expect(wrapped.fetchTimeline(ctxFor(id), 10)).rejects.toThrow(/paused/i);
+
+      resetBreaker(id);
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockResolvedValueOnce([POST]);
+      await expect(wrapped.fetchTimeline(ctxFor(id), 10)).resolves.toHaveLength(1);
+    });
+  });
+
+  describe("refresh accounting and concurrency", () => {
+    it("the post-refresh replay does not consume a retry attempt (401→refresh→502→502→success fits in 3 attempts)", async () => {
+      const inner = fakeConnector({
+        refreshCredentials: vi.fn().mockResolvedValue({ accessToken: "fresh" }),
+      });
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(statusError(401, "Unauthorized"))
+        .mockRejectedValueOnce(statusError(502))
+        .mockRejectedValueOnce(statusError(502))
+        .mockResolvedValueOnce([POST]);
+
+      const wrapped = wrapConnector(inner, { ...FAST, maxFetchAttempts: 3 });
+      await expect(wrapped.fetchTimeline(ctxFor(crypto.randomUUID()), 10)).resolves.toHaveLength(1);
+      expect(inner.fetchTimeline).toHaveBeenCalledTimes(4);
+    });
+
+    it("concurrent 401s on one connection share a single refresh (rotating tokens are single-use)", async () => {
+      let releaseRefresh!: (v: unknown) => void;
+      const refreshGate = new Promise((r) => (releaseRefresh = r));
+      const refreshMock = vi.fn().mockImplementation(async () => {
+        await refreshGate;
+        return { accessToken: "fresh" };
+      });
+      const inner = fakeConnector({ refreshCredentials: refreshMock });
+      (inner.fetchTimeline as ReturnType<typeof vi.fn>).mockImplementation(async (ctx: { accessToken?: string }) => {
+        if (ctx.accessToken !== "fresh") throw statusError(401, "Unauthorized");
+        return [POST];
+      });
+
+      const wrapped = wrapConnector(inner, FAST);
+      const id = crypto.randomUUID();
+      const ctx = { handle: "@x", accessToken: "stale", connectionId: id };
+
+      const a = wrapped.fetchTimeline(ctx, 10);
+      const b = wrapped.fetchTimeline(ctx, 10);
+      await new Promise((r) => setTimeout(r, 10));
+      releaseRefresh(null);
+
+      await expect(a).resolves.toHaveLength(1);
+      await expect(b).resolves.toHaveLength(1);
+      expect(refreshMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("registry integration", () => {
     it("wraps live connectors with resilience (retries happen through getConnector)", async () => {
       const spy = vi.fn().mockRejectedValueOnce(statusError(502)).mockResolvedValueOnce([POST]);

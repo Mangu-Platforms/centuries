@@ -1,5 +1,5 @@
 import type { PlatformId } from "../config.js";
-import { wrapConnector } from "../lib/resilience.js";
+import { wrapConnector, type ResilienceOptions } from "../lib/resilience.js";
 import { getConnector as getDemoConnector } from "./demo.js";
 import type { PlatformConnector } from "./types.js";
 
@@ -36,14 +36,20 @@ export function hasLiveConnector(platform: PlatformId): boolean {
  *   credential (access token or app password) available to hand it. Callers
  *   determine this from the Connection row before decrypting anything.
  */
-export function getConnector(platform: PlatformId, hasCredentials = false): PlatformConnector {
+export function getConnector(
+  platform: PlatformId,
+  hasCredentials = false,
+  resilience?: ResilienceOptions,
+): PlatformConnector {
   if (hasCredentials) {
     const factory = liveFactories.get(platform);
     // Live connectors get the Phase C5 resilience wrapper (retries with
     // backoff, 429 handling, per-connection circuit breaker, credential
-    // refresh). Demo connectors are local and deterministic — wrapping
-    // them would add nothing but nondeterminism to tests.
-    if (factory) return wrapConnector(factory());
+    // refresh). Interactive callers (connect/reconnect/OAuth callback)
+    // pass INTERACTIVE_RESILIENCE for a snappier profile; background work
+    // uses the defaults. Demo connectors are local and deterministic —
+    // wrapping them would add nothing but nondeterminism to tests.
+    if (factory) return wrapConnector(factory(), resilience);
   }
   return getDemoConnector(platform);
 }

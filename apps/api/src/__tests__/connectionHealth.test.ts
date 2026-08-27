@@ -412,6 +412,64 @@ describe("connection health (C6 + C1b)", () => {
       await app.close();
     });
 
+    it("clears an open circuit breaker: a corrected credential is verified, not rejected by fail-fast (C5)", async () => {
+      const { wrapConnector, __resetBreakersForTests } = await import("../lib/resilience.js");
+
+      const app = await buildApp();
+      const { token, userId } = await registerUser(app);
+
+      // A connection whose credential was rejected at connect time…
+      loginMock.mockRejectedValueOnce(new Error("Invalid identifier or password"));
+      const connectRes = await app.inject({
+        method: "POST",
+        url: "/api/connections",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { platform: "bluesky", handle: "breaker.bsky.social", credential: "wrong" },
+      });
+      const connectionId = connectRes.json().connection.id as string;
+
+      // …whose breaker has since been slammed open by repeated failures
+      // (simulated directly against the shared module-scoped breaker Map,
+      // keyed by this connection's id).
+      const failing = {
+        platform: "bluesky" as const,
+        fetchTimeline: vi.fn().mockRejectedValue(Object.assign(new Error("down"), { status: 400 })),
+        publish: vi.fn(),
+      };
+      const wrapped = wrapConnector(failing, { breakerFailureThreshold: 1, breakerOpenMs: 600_000 });
+      await expect(
+        wrapped.fetchTimeline({ handle: "breaker.bsky.social", connectionId }, 1),
+      ).rejects.toThrow(/down/);
+      await expect(
+        wrapped.fetchTimeline({ handle: "breaker.bsky.social", connectionId }, 1),
+      ).rejects.toThrow(/paused/i);
+
+      try {
+        // The user retries with the CORRECT credential: the reconnect
+        // route must reset the breaker and actually verify it.
+        loginMock.mockResolvedValue({});
+        getTimelineMock.mockResolvedValue(LIVE_TIMELINE);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/connections/${connectionId}/reconnect`,
+          headers: { authorization: `Bearer ${token}` },
+          payload: { credential: "correct-now" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().warning).toBeUndefined();
+        expect(res.json().connection.status).toBe("active");
+        expect(loginMock).toHaveBeenLastCalledWith({
+          identifier: "breaker.bsky.social",
+          password: "correct-now",
+        });
+      } finally {
+        __resetBreakersForTests();
+      }
+
+      await prisma.user.delete({ where: { id: userId } });
+      await app.close();
+    });
+
     it("re-fetches a credential-less (demo) connection without requiring a credential", async () => {
       const app = await buildApp();
       const { token, userId } = await registerUser(app);
