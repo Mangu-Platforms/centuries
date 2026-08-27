@@ -46,6 +46,64 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 10 (Phase G3: observability — metrics, error reporting hook, log redaction)
+
+**Summary:** PR #7 still open, draft, `mergeable_state: clean` — nothing
+needed there this cycle. Picked **G3**, per Session 9's own "Next step"
+recommendation. Scoped it by reading the actual logging setup first:
+structured pino request logs (request-id-correlated) already existed
+since Phase A6, so the genuine gaps were metrics and an error-reporting
+hook, not logging itself.
+
+**What shipped:**
+- **Metrics.** New `apps/api/src/lib/metrics.ts`: an in-process `Map` of
+  per-`method+route` counters (request count, 5xx error count, summed
+  duration), fed by a new `onResponse` hook and rendered as hand-rolled
+  Prometheus text exposition format at a new `GET /metrics`. Deliberately
+  no `prom-client` dependency — three counters per route doesn't justify
+  a full metrics library. Uses `request.routeOptions.url` (the registered
+  route *pattern*) rather than the literal path, so a 404 on a garbage
+  URL can't create unbounded label cardinality — bucketed as
+  `route="unmatched"` instead.
+- **Error reporting hook.** Extracted the one `request.log.error(...)`
+  call in the global error handler into a named `reportError()` in new
+  `apps/api/src/lib/errorReporting.ts`. Still just pino logging today,
+  but it's now a single seam for wiring in a real error-tracking service
+  later via an env var — same split as `EmailProvider`/`MediaStorage`.
+- **Log redaction.** Added pino `redact` paths (auth header, cookie
+  header, password/token/accessToken/refreshToken fields) as defense in
+  depth. Confirmed by reading the actual log shape that nothing currently
+  logs a header or body, so this guards a *future* leak, not a current
+  one.
+
+**Verified live, not just types passing:** `npm run lint && npm test &&
+npm run build` all green (134/134 tests, 7 new). Started a real server:
+`curl`-confirmed `/metrics` reflects real traffic (two `/health` calls, a
+login, a 404) with correct counts/labels/`content-type`; confirmed the
+demo account still logs in with the new pino `redact` config active (an
+invalid redact path throws at Fastify construction — it didn't); confirmed
+via the server's own log output that requests still log normally.
+
+**Commands run:** `npm run lint`, `npm test` (134/134), `npm run build`;
+live smoke test via `curl` against a running dev server as described
+above.
+
+**Files touched:** `apps/api/src/app.ts`, `apps/api/src/lib/metrics.ts`
+(new), `apps/api/src/lib/errorReporting.ts` (new),
+`apps/api/src/__tests__/metrics.test.ts` (new),
+`apps/api/src/__tests__/errorReporting.test.ts` (new),
+`docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase G
+items: G2 (harden Railway/Vercel docs, preview deploys), G5 (improve
+autonomous_agent.py — last priority, product over agent), G6
+(OPERATOR.md — how to run, env matrix, add a fifth platform; also the
+campaign's own close-out signal once every other item is DONE). G2 is a
+reasonable next pick — self-contained, and pairs naturally with G1's
+Postgres work already done.
+
 ### 2026-08-27 — Session 9 (Phase G4: security pass — CSP, CORS audit, secret hygiene)
 
 **Summary:** PR #7 (Phase F close-out) still open, draft, `mergeable_state:
