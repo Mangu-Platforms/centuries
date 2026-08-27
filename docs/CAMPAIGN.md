@@ -46,6 +46,64 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 5 (Phase F3: error toasts)
+
+**Summary:** PR #6 still open and green. Picked **F3**, the top TODO item
+in Phase F now that Phase E is fully complete. Re-scoped it after actually
+reading the code rather than trusting the backlog note: two of the three
+named concerns — empty states (feed/connections/history all already had a
+dashed-border "no X yet" block) and optimistic UI with rollback
+(`PostCard`'s like/bookmark already updated state immediately and rolled
+back on a failed request) — were already implemented. A first grep for
+`toast\|rollback\|optimistic` came back empty and briefly suggested
+*nothing* existed yet; reading `PostCard.tsx` directly showed that grep
+had just missed a capitalized `// Optimistic update` comment. The real,
+confirmed gap was error toasts: five spots swallowed a failure completely
+silently (`.catch(() => {})`), leaving no way for a user to know a
+background load or an optimistic rollback had failed.
+
+**What shipped:** New `apps/web/lib/toast.tsx` — a dependency-free
+`ToastProvider`/`useToast()` React context, mirroring the existing
+`AuthProvider` shape. Stacked, auto-dismissing (5s) toasts in a
+fixed-position bottom container; `pointer-events-none` on the wrapper with
+`pointer-events-auto` per-toast so the empty space around them never
+blocks clicks. Mounted in `app/layout.tsx`, wrapping `AuthProvider`. Wired
+`useToast()` into the 5 silent-failure call sites: `PostCard.tsx`'s
+`toggleLike`/`toggleBookmark` rollback catches, and the initial background
+loads in `dashboard/page.tsx` (overview + history), `dashboard/connections
+/page.tsx`, and `dashboard/settings/page.tsx`. Left every failure that
+already had a form-adjacent inline `error` state alone (login, register,
+composer publish, connect-a-platform, change-password) — toasts are
+additive for failures with no natural inline home, not a replacement for
+existing inline error UI.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests unaffected; two pre-existing `react-hooks/
+exhaustive-deps` warnings on `connections/page.tsx` and `settings/
+page.tsx` are unrelated to this slice and predate it). Manual smoke test
+against two live dev servers: logged in as the demo account, loaded the
+unified feed, killed the API process mid-session (verified down via a
+failed `curl`, not just process-not-found in `ps`), clicked Like on a
+post, and confirmed via a headless-browser screenshot that the like
+state rolled back **and** a "Couldn't update like. Try again." toast
+rendered in the bottom-right corner. Cleaned up both dev servers and the
+scratch Playwright script afterward.
+
+**Files touched:** `apps/web/lib/toast.tsx` (new), `apps/web/app/
+layout.tsx`, `apps/web/components/PostCard.tsx`, `apps/web/app/dashboard/
+page.tsx`, `apps/web/app/dashboard/connections/page.tsx`, `apps/web/app/
+dashboard/settings/page.tsx`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #6 is still open, commit this in reviewable
+slices (toast lib + layout wiring; the five call-site wirings; docs), push.
+Phase F remaining: F1 (analytics — now unblocked by live Bluesky/Mastodon
+connectors, needs scoping), F2 (platform-mirrored bookmarks/likes — needs
+new connector-interface methods, bigger lift), F5 (landing page polish).
+After Phase F, Phase G (Postgres datasource, deploy docs, observability,
+security pass, OPERATOR.md) is the only phase left entirely untouched.
+
 ### 2026-08-27 — Session 4 continued (Phase E5: Instagram as a full demo platform)
 
 **Summary:** PR #6 still open and green. Picked **E5** — the last open
