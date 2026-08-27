@@ -46,6 +46,25 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7, part 8 (D8: infinite scroll + j/k nav; D6: real search)
+
+**D8:** IntersectionObserver sentinel (600px lookahead) auto-loads the
+next feed page; the button stays as the no-JS fallback and
+`prefers-reduced-motion` users keep explicit paging. j/k moves focus
+between posts (tabIndex=-1 articles with a visible ring), suppressed
+while typing / with modifiers / with a dialog open. Verified live:
+20→40 auto-load with no click, focus indexes correct, "jk" typed into
+search stays text.
+
+**D6 (provider-agnostic step):** search upgraded from one raw substring
+over `content` to multi-term AND across content + author handle + author
+name — every whitespace-separated term must match somewhere. Full-text
+indexing (SQLite FTS5 / Postgres `tsvector`) is deliberately deferred
+into G1: FTS5 needs raw SQL + a virtual table + sync triggers that the
+Postgres migration would immediately redo differently, and the charter
+keeps Prisma queries provider-agnostic until G1 breaks that seal
+deliberately. Noted in the backlog as the explicit residual.
+
 ### 2026-08-27 — Session 7, part 7 (A8 + B6 + D7; E7 review hardening)
 
 **Three small charter items:** **A8** — platform-parity drift check as a

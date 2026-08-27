@@ -153,3 +153,57 @@ describe("Phase D2: feed pagination + filters", () => {
     await app.close();
   });
 });
+
+describe("multi-term search (D6)", () => {
+  it("ANDs terms across content, author handle, and author name", async () => {
+    const app = await buildApp();
+    const email = `feed-search-${crypto.randomUUID()}@nexus.app`;
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { email, password: "password123", displayName: "Search Test" },
+    });
+    const token = reg.json().token as string;
+    const userId = reg.json().user.id as string;
+
+    const connection = await prisma.connection.create({
+      data: { userId, platform: "twitter", handle: "@searcher" },
+    });
+    const base = {
+      userId,
+      connectionId: connection.id,
+      platform: "twitter",
+      authorAvatar: "",
+      mediaUrls: "[]",
+      postedAt: new Date(),
+    };
+    await prisma.feedPost.createMany({
+      data: [
+        { ...base, externalId: "s1", authorHandle: "@alicedev", authorName: "Alice", content: "shipping the beta today" },
+        { ...base, externalId: "s2", authorHandle: "@bob", authorName: "Bob", content: "beta feedback thread" },
+        { ...base, externalId: "s3", authorHandle: "@alicedev", authorName: "Alice", content: "weekend hike photos" },
+      ],
+    });
+
+    const search = async (query: string) => {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/feed?search=${encodeURIComponent(query)}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      return (res.json().posts as Array<{ externalId: string }>).map((p) => p.externalId).sort();
+    };
+
+    // One term matches content OR author fields.
+    expect(await search("beta")).toEqual(["s1", "s2"]);
+    expect(await search("alicedev")).toEqual(["s1", "s3"]);
+    // Terms AND together — one may match the author, another the content.
+    expect(await search("alicedev beta")).toEqual(["s1"]);
+    expect(await search("beta feedback")).toEqual(["s2"]);
+    // A term matching nothing eliminates everything.
+    expect(await search("beta nonexistentterm")).toEqual([]);
+
+    await prisma.user.delete({ where: { id: userId } });
+    await app.close();
+  });
+});

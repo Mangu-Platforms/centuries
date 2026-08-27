@@ -44,7 +44,23 @@ export async function feedRoutes(app: FastifyInstance): Promise<void> {
       where.platform = q.platform;
     }
     if (q.search) {
-      where.content = { contains: q.search };
+      // Phase D6: every whitespace-separated term must match somewhere in
+      // the post — content, author handle, or author name — instead of the
+      // old single raw substring over content only. Term count is bounded
+      // so a pathological query can't explode the WHERE clause. Full-text
+      // indexing (FTS5/tsvector) deliberately waits for G1's Postgres
+      // migration: it requires provider-specific raw SQL the migration
+      // would immediately redo.
+      const terms = q.search.trim().split(/\s+/).filter(Boolean).slice(0, 8);
+      if (terms.length > 0) {
+        where.AND = terms.map((term) => ({
+          OR: [
+            { content: { contains: term } },
+            { authorHandle: { contains: term } },
+            { authorName: { contains: term } },
+          ],
+        }));
+      }
     }
     if (q.bookmarked === "true") {
       where.bookmarked = true;
