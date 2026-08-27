@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import type { FeedPost } from "@/lib/types";
-import { PlatformGlyph } from "@/lib/platforms";
+import { PLATFORM_META, PlatformGlyph } from "@/lib/platforms";
 import { useToast } from "@/lib/toast";
 
 function timeAgo(iso: string): string {
@@ -113,8 +113,12 @@ export function PostCard({ post }: { post: FeedPost }) {
     // Optimistic update
     setState((s) => ({ ...s, liked: !s.liked, likeCount: s.likeCount + (s.liked ? -1 : 1) }));
     try {
-      const { post } = await api.like(state.id);
+      const { post, mirrorError } = await api.like(state.id);
       setState(post);
+      // The like itself succeeded (that's what mirrorError being present
+      // vs. the request throwing distinguishes) -- this is a heads-up that
+      // it didn't reach the real platform, not a rollback-worthy failure.
+      if (mirrorError) showToast(`Liked here, but couldn't sync to ${PLATFORM_META[post.platform].name}.`);
     } catch {
       setState((s) => ({ ...s, liked: !s.liked, likeCount: s.likeCount + (s.liked ? -1 : 1) }));
       showToast("Couldn't update like. Try again.");
@@ -126,8 +130,9 @@ export function PostCard({ post }: { post: FeedPost }) {
   const toggleBookmark = async () => {
     setState((s) => ({ ...s, bookmarked: !s.bookmarked }));
     try {
-      const { post } = await api.bookmark(state.id);
+      const { post, mirrorError } = await api.bookmark(state.id);
       setState(post);
+      if (mirrorError) showToast(`Bookmarked here, but couldn't sync to ${PLATFORM_META[post.platform].name}.`);
     } catch {
       setState((s) => ({ ...s, bookmarked: !s.bookmarked }));
       showToast("Couldn't update bookmark. Try again.");
