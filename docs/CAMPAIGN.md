@@ -46,6 +46,28 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7, part 6 (C7 + D5: capabilities seam + thread drawer)
+
+**Summary:** C7 (capability descriptor) and D5's read-only half in one
+arc, tests first (4 + 3, all observed red before implementation).
+Capabilities are *derived* from which optional methods a connector
+implements (`capabilitiesOf()`) rather than a hand-maintained table —
+the review lesson from A6/E5 (hand-synced twins drift) applied
+preemptively. Demo connectors got a deterministic `fetchThread` so the
+zero-credential demo path exercises the whole drawer; live
+Bluesky/Mastodon thread support + reply posting split out as **D5b**.
+`GET /api/feed` now marks each post `threadAvailable` (memoized per
+platform+credential pair), `GET /api/feed/:id/thread` serves the local
+cached row as root + connector replies (capability-gated 404), and the
+web got a right-side `ThreadDrawer` with the same a11y contract as the
+connections dialog.
+
+**Commands run (all green):** lint (after fixing two TS null-safety
+errors it caught in the new feed code — `FeedPost.connectionId` is
+nullable) · **25 files / 183 tests** · build · live walkthrough:
+drawer opened from a demo post's reply count, root + replies rendered,
+Escape closed with focus restored (screenshot). DB reseeded.
+
 ### 2026-08-27 — Session 7, part 5 (E8: schedule UI + Planner v0; E7 hardening)
 
 **E7 hardening first:** while writing E7's review brief I spotted a real
