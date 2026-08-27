@@ -60,14 +60,17 @@ function Stat({ label, value, kind }: { label: string; value: string | number; k
 export default function DashboardOverview() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
-  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  // Per-job in-flight set: retries of DIFFERENT jobs may run concurrently
+  // (the server's atomic claim makes that safe); only a re-click on the
+  // same job is a no-op, and only that job's button reads as busy.
+  const [retryingJobIds, setRetryingJobIds] = useState<ReadonlySet<string>>(new Set());
   const { showToast } = useToast();
 
   // Phase E7: one-tap recovery for a partially failed cross-post — retries
   // only the failed targets, then patches that job's row in place.
   const retryJob = async (jobId: string) => {
-    if (retryingJobId) return;
-    setRetryingJobId(jobId);
+    if (retryingJobIds.has(jobId)) return;
+    setRetryingJobIds((s) => new Set(s).add(jobId));
     try {
       const res = await api.retryPost(jobId);
       setHistory((jobs) =>
@@ -94,7 +97,11 @@ export default function DashboardOverview() {
     } catch {
       showToast("Couldn't retry. Try again.");
     } finally {
-      setRetryingJobId(null);
+      setRetryingJobIds((s) => {
+        const next = new Set(s);
+        next.delete(jobId);
+        return next;
+      });
     }
   };
 
@@ -234,12 +241,12 @@ export default function DashboardOverview() {
                   {job.targets.some((t) => t.status === "failed") && (
                     <button
                       onClick={() => retryJob(job.id)}
-                      aria-disabled={retryingJobId === job.id}
+                      aria-disabled={retryingJobIds.has(job.id)}
                       className={`btn-ghost px-2 py-1 text-xs font-semibold text-brand-600 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-900/30 ${
-                        retryingJobId === job.id ? "cursor-not-allowed opacity-50" : ""
+                        retryingJobIds.has(job.id) ? "cursor-not-allowed opacity-50" : ""
                       }`}
                     >
-                      {retryingJobId === job.id ? "Retrying…" : "Retry failed"}
+                      {retryingJobIds.has(job.id) ? "Retrying…" : "Retry failed"}
                     </button>
                   )}
                 </div>

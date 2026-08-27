@@ -110,7 +110,14 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const targets = await Promise.all(
-      platforms.map((platform) => prisma.publishTarget.create({ data: { jobId: job.id, platform } })),
+      platforms.map((platform) =>
+        prisma.publishTarget.create({
+          // connectionId pins the account chosen at compose time — a later
+          // retry or scheduled send must publish through THIS connection,
+          // never a different account on the same platform.
+          data: { jobId: job.id, platform, connectionId: byPlatform.get(platform)!.id },
+        }),
+      ),
     );
 
     const results: Array<{ platform: PlatformId; status: string; externalId: string; error: string; latencyMs: number }> = [];
@@ -152,13 +159,24 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
   // Phase E7: re-attempt ONLY a job's failed targets. Partial failure is
   // already reported per target (CP03); this turns it into one-tap
   // recovery. Race-safe by an atomic claim: each failed target is flipped
-  // failed→pending via a guarded updateMany, so of two concurrent retries
-  // only one actually re-publishes any given target (the loser's claim
-  // matches zero rows). Rate-limited: every claim triggers an outbound
-  // publish attempt.
+  // failed→pending via a guarded updateMany (and attemptPublish takes its
+  // own pending→publishing claim), so a retry racing another retry or the
+  // tick worker publishes each target at most once. Rate-limited per
+  // authenticated user (auth runs first): every claim triggers an
+  // outbound publish attempt, and a per-IP bucket would be one shared
+  // global bucket behind a reverse proxy.
   app.post(
     "/api/posts/:id/retry",
-    { preHandler: [app.rateLimit({ max: 10, timeWindow: "1 minute" }), app.authenticate] },
+    {
+      preHandler: [
+        app.authenticate,
+        app.rateLimit({
+          max: 10,
+          timeWindow: "1 minute",
+          keyGenerator: (req) => (req as { user?: { sub?: string } }).user?.sub ?? req.ip,
+        }),
+      ],
+    },
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const job = await prisma.publishJob.findFirst({
@@ -170,30 +188,36 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
       const failedTargets = job.targets.filter((t) => t.status === "failed");
       const mediaUrls = JSON.parse(job.mediaUrls) as string[];
 
-      const platforms = failedTargets.map((t) => t.platform as PlatformId);
-      const connections = platforms.length
-        ? await prisma.connection.findMany({
-            where: { userId: request.user.sub, platform: { in: platforms } },
-          })
+      const connections = failedTargets.length
+        ? await prisma.connection.findMany({ where: { userId: request.user.sub } })
         : [];
       const byPlatform = new Map(connections.map((c) => [c.platform, c]));
+      const byId = new Map(connections.map((c) => [c.id, c]));
 
       let retried = 0;
       for (const target of failedTargets) {
         const platform = target.platform as PlatformId;
-        const connection = byPlatform.get(platform);
+        // Pin to the compose-time connection (see PublishTarget.connectionId);
+        // platform fallback only for legacy rows without a pin.
+        const connection = target.connectionId ? byId.get(target.connectionId) : byPlatform.get(platform);
         if (!connection) {
           await prisma.publishTarget.updateMany({
             where: { id: target.id, status: "failed" },
-            data: { error: `No ${platform} connection found at retry time` },
+            data: {
+              error: target.connectionId
+                ? `The ${platform} connection this post was composed for has been removed`
+                : `No ${platform} connection found at retry time`,
+            },
           });
           continue;
         }
 
         // The atomic claim: only the request that wins this update may
-        // re-publish this target. (If the process died between claim and
-        // attempt, the target would show as "pending" until a further
-        // manual retry — visible, not silent, and never double-posted.)
+        // re-publish this target. A crash between this claim and the
+        // attempt strands the target as "pending" — the tick worker's
+        // stale-strand sweep (lib/publish.ts) recovers it, and a strand in
+        // "publishing" is surfaced as check-before-retrying. Never a
+        // silent double post.
         const claim = await prisma.publishTarget.updateMany({
           where: { id: target.id, status: "failed" },
           data: { status: "pending", error: "" },

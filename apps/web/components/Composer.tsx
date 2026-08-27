@@ -188,6 +188,7 @@ export function Composer({
               {jobId && results.some((r) => r.status === "failed") && (
                 <button
                   onClick={async () => {
+                    setError(null); // a stale earlier error must not linger next to fresh results
                     setRetrying(true);
                     try {
                       const res = await api.retryPost(jobId);

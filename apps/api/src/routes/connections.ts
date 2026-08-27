@@ -135,12 +135,23 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
   // path. Success heals status/lastError and stamps lastSyncedAt.
   app.post(
     "/api/connections/:id/reconnect",
-    // Rate-limited ahead of auth, same reasoning as the Mastodon register
-    // route: a reconnect carrying a candidate credential triggers an
-    // outbound live login attempt against a third-party platform and
-    // reports its verdict, so left unbounded this route is a free
-    // credential-testing oracle. 5/min matches the register route.
-    { preHandler: [app.rateLimit({ max: 5, timeWindow: "1 minute" }), app.authenticate] },
+    // Rate-limited because a reconnect carrying a candidate credential
+    // triggers an outbound live login attempt against a third-party
+    // platform and reports its verdict — unbounded, this route is a free
+    // credential-testing oracle. Auth runs first and the bucket is keyed
+    // per user: behind a reverse proxy every client shares one IP, so a
+    // per-IP bucket would be a single global limit (and anonymous traffic
+    // could exhaust it — here it 401s before consuming anything).
+    {
+      preHandler: [
+        app.authenticate,
+        app.rateLimit({
+          max: 5,
+          timeWindow: "1 minute",
+          keyGenerator: (req) => (req as { user?: { sub?: string } }).user?.sub ?? req.ip,
+        }),
+      ],
+    },
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const parsed = z.object({ credential: z.string().max(500).optional() }).safeParse(request.body ?? {});

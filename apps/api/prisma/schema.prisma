@@ -177,6 +177,14 @@ model PublishTarget {
   externalId String   @default("")
   error      String   @default("")
   latencyMs  Int      @default(0)
+  // Pins the exact connection this target publishes through (E7 review):
+  // a user can hold several accounts on one platform, and a retry must
+  // never silently switch to a different account than the one chosen at
+  // compose time. Nullable for rows created before this column existed.
+  connectionId String?
+  // Bumped by every status transition; lets the tick sweep provably-stale
+  // "publishing" claims (crashed mid-attempt) into a visible failed state.
+  updatedAt DateTime @default(now()) @updatedAt
 
   job PublishJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 

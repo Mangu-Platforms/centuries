@@ -24,9 +24,44 @@ export interface ScheduledSendResult {
  * scheduled — the user may have reconnected (or disconnected) a platform
  * in between.
  */
+/**
+ * How long a "publishing" claim may sit untouched before the tick treats
+ * it as a crashed attempt, and how old an unscheduled job's "pending"
+ * target must be before the tick sweeps it up as a strand. Far above any
+ * real attempt duration (per-attempt timeout is 10s).
+ */
+const STALE_CLAIM_MS = 10 * 60 * 1000;
+
 export async function runDueScheduledSends(): Promise<ScheduledSendResult> {
+  const staleBefore = new Date(Date.now() - STALE_CLAIM_MS);
+
+  // Recovery sweep #1 (E7 review): a target stranded in "publishing" means
+  // a process died between the claim and the outcome. The connector MAY
+  // have published before the crash, so it must never be silently
+  // re-attempted — flip it to a visible failure that tells the user to
+  // check the platform before retrying. updatedAt is bumped by the claim
+  // itself, so an actively publishing target is never this old.
+  await prisma.publishTarget.updateMany({
+    where: { status: "publishing", updatedAt: { lte: staleBefore } },
+    data: {
+      status: "failed",
+      error: "Interrupted mid-publish — check the platform for the post before retrying",
+    },
+  });
+
   const dueJobs = await prisma.publishJob.findMany({
-    where: { scheduledAt: { lte: new Date() }, targets: { some: { status: "pending" } } },
+    where: {
+      OR: [
+        { scheduledAt: { lte: new Date() } },
+        // Recovery sweep #2: an unscheduled job normally publishes inline,
+        // so an old "pending" target on one is a strand (e.g. a crash
+        // between the retry route's re-arm and its attempt). Safe to
+        // publish: a pending target provably never reached a connector —
+        // the pending→publishing claim always precedes the call.
+        { scheduledAt: null, createdAt: { lte: staleBefore } },
+      ],
+      targets: { some: { status: "pending" } },
+    },
     include: { targets: { where: { status: "pending" } } },
   });
 
@@ -34,20 +69,27 @@ export async function runDueScheduledSends(): Promise<ScheduledSendResult> {
   let targetsFailed = 0;
 
   for (const job of dueJobs) {
-    const platforms = job.targets.map((t) => t.platform as PlatformId);
-    const connections = await prisma.connection.findMany({
-      where: { userId: job.userId, platform: { in: platforms } },
-    });
+    const connections = await prisma.connection.findMany({ where: { userId: job.userId } });
     const byPlatform = new Map(connections.map((c) => [c.platform, c]));
+    const byId = new Map(connections.map((c) => [c.id, c]));
     const mediaUrls = JSON.parse(job.mediaUrls) as string[];
 
     for (const target of job.targets) {
       const platform = target.platform as PlatformId;
-      const connection = byPlatform.get(platform);
+      // Pin to the exact connection chosen at compose time (E7 review): a
+      // platform can have several connected accounts, and re-resolving by
+      // platform could silently publish through a different one. Fall back
+      // to platform resolution only for legacy rows with no pin.
+      const connection = target.connectionId ? byId.get(target.connectionId) : byPlatform.get(platform);
       if (!connection) {
         await prisma.publishTarget.update({
           where: { id: target.id },
-          data: { status: "failed", error: `No ${platform} connection found at send time` },
+          data: {
+            status: "failed",
+            error: target.connectionId
+              ? `The ${platform} connection this post was composed for has been removed`
+              : `No ${platform} connection found at send time`,
+          },
         });
         targetsFailed++;
         continue;
@@ -114,9 +156,15 @@ export async function attemptPublish(params: {
     return { status: "skipped", externalId: "", error: "", latencyMs: 0 };
   }
 
+  // The failure-recording catch wraps ONLY the connector call: once the
+  // platform has accepted the post, nothing may relabel this target as
+  // "failed" — a failed label on a live post invites the user's retry to
+  // genuinely double-post (E7 review). Bookkeeping errors after a
+  // successful publish are absorbed instead.
+  let res;
   try {
     const hasCredentials = Boolean(connection.appPasswordEnc || connection.accessTokenEnc);
-    const res = await getConnector(platform, hasCredentials).publish(
+    res = await getConnector(platform, hasCredentials).publish(
       {
         handle: connection.handle,
         instance: connection.instance,
@@ -127,7 +175,13 @@ export async function attemptPublish(params: {
       content,
       mediaUrls,
     );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    await prisma.publishTarget.update({ where: { id: targetId }, data: { status: "failed", error: message } });
+    return { status: "failed", externalId: "", error: message, latencyMs: 0 };
+  }
 
+  try {
     await prisma.publishTarget.update({
       where: { id: targetId },
       data: { status: "success", externalId: res.externalId, latencyMs: res.latencyMs },
@@ -148,11 +202,12 @@ export async function attemptPublish(params: {
         postedAt: new Date(),
       },
     });
-
-    return { status: "success", externalId: res.externalId, error: "", latencyMs: res.latencyMs };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    await prisma.publishTarget.update({ where: { id: targetId }, data: { status: "failed", error: message } });
-    return { status: "failed", externalId: "", error: message, latencyMs: 0 };
+  } catch {
+    // e.g. an externalId collision in the local feed cache — the post is
+    // live on the platform regardless; report it as the success it is.
+    // If even the status update failed, the row stays "publishing" and the
+    // tick's stale-claim sweep surfaces it as check-before-retry.
   }
+
+  return { status: "success", externalId: res.externalId, error: "", latencyMs: res.latencyMs };
 }
