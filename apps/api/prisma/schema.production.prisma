@@ -1,3 +1,12 @@
+// GENERATED FILE -- do not hand-edit.
+//
+// Derived from schema.prisma by scripts/generateProductionSchema.ts
+// (`npm run db:generate-prod-schema`), swapping only the datasource
+// block for Postgres. Every model here is identical to schema.prisma by
+// construction -- to change a model, edit schema.prisma and regenerate,
+// never this file directly (a hand-edit here is silently overwritten on
+// the next regenerate, and would drift from schema.prisma in the meantime).
+
 // NEXUS Social Media Aggregator - Prisma schema (dev/local, SQLite)
 //
 // This is the single source of truth for every model. For production
@@ -18,7 +27,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
