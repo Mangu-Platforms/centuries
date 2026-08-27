@@ -86,6 +86,106 @@ with 2 pre-existing `react-hooks/exhaustive-deps` warnings, non-blocking)
 health UI) — the highest-priority unblocked charter-phase TODO, and the
 strategy pack's own #1 build recommendation (`docs/strategy/05` §E.1).
 
+### 2026-08-27 — Session 7, part 2 (Phase C6 + C1b: connection health)
+
+**Summary:** Re-derived priority from the reconciled backlog rather than
+taking the founder's suggestion on faith — and confirmed it: after A6b/A8
+(explicitly low-priority polish) and B6 (cosmetic), the Phase C frontier is
+C5 vs C6+C1b; took C6+C1b because it fixes a live defect (a rejected live
+credential was invisible in the UI), is the strategy pack's #1 build
+recommendation, and gives C5's future circuit-breaker state a place to be
+seen. Wrote the failing test first (8 cases, 7 failed on the missing schema
+fields), then implemented.
+
+**What shipped:**
+- `Connection.lastSyncedAt` / `Connection.lastError` (schema + `prisma db
+  push` + regenerate). Every successful timeline fetch — connect-time
+  import, reconnect, periodic sync — stamps `lastSyncedAt`, clears
+  `lastError`, and sets `status: "active"` (self-heal); every failure
+  records the message and flips `status: "error"`. `importInitialTimeline`
+  and `syncConnection` share the semantics, so the OAuth callback path
+  (`mastodonAuth.ts`) gets them for free.
+- `POST /api/connections/:id/reconnect` — ownership-checked; app-password
+  platforms may carry a fresh credential (re-encrypted before storage,
+  same as connect); credential-less (demo-mode) connections just re-fetch;
+  response shape identical to connect (`{ connection, importedPosts,
+  warning? }`). `publicConnection()` now exposes the two health fields
+  (encrypted material still never serialized).
+- Web connections page: per-row "Synced Xm ago" / "Not synced yet",
+  status-colored badges (emerald/amber/rose via existing badge classes),
+  rose `lastError` strip, per-row **Reconnect** (Mastodon → OAuth
+  re-authorization redirect; Bluesky → app-password dialog; demo →
+  direct re-fetch), and **Disconnect now requires confirmation** in an
+  accessible dialog (role=dialog, aria-modal, labelled, initial focus +
+  focus restore, Escape cancels, Tab cycles). C1b: a `warning` on the
+  connect/reconnect response renders an amber strip instead of a false
+  success. `PLATFORM_META` gained `authKind` (semantic mirror of the API's
+  `auth` field) so the UI stops string-matching display labels.
+- Seed stamps `lastSyncedAt` so the demo account starts with honest
+  health data.
+
+**Commands run (all green, evidence in session scratchpad):**
+- `npm run lint` — clean (the same 2 pre-existing `exhaustive-deps`
+  warnings, no new ones).
+- `npm test` — **20 files / 128 tests** (8 new in
+  `connectionHealth.test.ts`, written failing-first).
+- `npm run build` — API + web clean.
+- `PLAYWRIGHT_CHROMIUM_PATH=… npx playwright test` — e2e golden path
+  passed against the running dev stack (9.4s).
+- Live headless-browser walkthrough with screenshots (not just selector
+  asserts): demo login works; 5 rows show "Synced Xm ago"; a
+  DB-simulated errored Mastodon row shows the rose badge + error strip;
+  the Disconnect dialog opens with proper roles and closes on Escape
+  without disconnecting; the Bluesky Reconnect dialog prompts for an app
+  password (cancelled — deliberately never submitted, so no live API was
+  called with a fabricated credential, per the charter hard stop); the
+  errored Mastodon connection was healed through the real Reconnect
+  button (badge → active, "Synced just now", error strip gone).
+- DB reseeded to a clean demo state afterward.
+
+**Review:** an adversarial multi-agent review (3 independent finders →
+3-refuter verification panel per finding, 45 agents total) ran over the
+slice diff before push: 14 raw findings, 12 confirmed (each upheld by
+≥2 of 3 refuters), 2 refuted. All 12 were fixed in `9e9bf32` before the
+first push. The two HIGH findings were the same root defect: the
+Mastodon OAuth callback hard-rejected an already-connected handle, so
+the one platform whose reconnect requires re-authorization could never
+actually reconnect — the freshly minted token was thrown away. Also
+fixed: the reconnect route was an unthrottled outbound
+credential-testing oracle (now rate-limited 5/min like the Mastodon
+register route); reconnect persisted a candidate credential before
+validating it (could destroy a known-good stored app password — now
+validate-first); the sync worker's new unconditional health stamp could
+throw P2025 on a mid-tick deleted row and abort the whole tick, and a
+slow stale tick could clobber a concurrent reconnect's newer state (now
+`updateMany` guarded on a new `updatedAt` optimistic-concurrency
+column, plus per-connection try/catch in the loop); and five web
+focus/state bugs (focus dropped to `<body>` after confirming either
+dialog, escapable focus trap via clicks on non-interactive dialog text,
+bfcache-stuck "Reconnecting…" button, stale error strip). +4 regression
+tests → suite is 132 passing. Focus fixes re-verified live in the
+browser (focus lands on the busy button / list heading, never
+`<body>`), demo login + reconnect walkthrough re-verified, DB reseeded.
+
+**Blockers:** none for this slice. C3/C4's "waiting on credentials" card
+state deliberately stays with those items — no live connector exists for
+X/Threads/Instagram yet, so "demo mode" is currently the accurate UI.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/lib/sync.ts`, `apps/api/src/lib/timelineImport.ts`,
+`apps/api/src/routes/connections.ts`, `apps/api/src/seed.ts`,
+`apps/api/src/__tests__/connectionHealth.test.ts` (new),
+`apps/web/lib/types.ts`, `apps/web/lib/api.ts`,
+`apps/web/lib/platforms.tsx`,
+`apps/web/app/dashboard/connections/page.tsx`, `docs/BACKLOG.md`,
+`docs/CAMPAIGN.md`.
+
+**Next step for the next session:** take **C5** (retries, 429 backoff +
+jitter, token-refresh hook, per-connection circuit breaker so one dead
+platform can't sink `/api/feed`) — the last non-parked charter item in
+Phase C, now with C6's `lastError`/status UI to surface its state. Then
+E7 (per-target retry) per the strategy pack's slice order.
+
 ### 2026-08-27 — Session 6 (Phase F1: real analytics)
 
 **Summary:** PR #6 still open (draft, `mergeable_state: clean`, CI green on
