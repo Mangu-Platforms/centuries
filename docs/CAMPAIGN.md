@@ -46,6 +46,88 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 7 (Phase F2: mirrored likes/bookmarks — Phase F complete)
+
+**Summary:** PR #6 (Phase E3 → F1) was merged by a human while this session
+was mid-check-in. Per this repo's "a merged PR is finished, restart the
+branch" convention: confirmed the branch's prior head
+(`5caabd8`) was an ancestor of the new default branch
+(`autonomous-agent-setup-6249396920522474145`, now at `e6db93d`), fast-
+forwarded onto it (no rebase needed), and picked up **F2** as fresh
+follow-up work — the last open item in Phase F, and the "bigger lift" this
+log already flagged it as.
+
+**What shipped:** `PlatformConnector` gained optional `setLiked`/
+`setBookmarked` methods; `FeedPost` gained `mirrorRef` (a connector-opaque
+reference to the real post -- a Mastodon status id, or a Bluesky
+`{uri,cid}` pair as JSON) and `likeMirrorRef` (Bluesky-only: the created
+like record's own URI, needed to delete it again on unlike). New
+`apps/api/src/lib/mirror.ts` resolves the connector + decrypted
+credentials and attempts the mirror, but **never throws** — a mirror
+failure still lets the local like/bookmark succeed, surfaced as a
+`mirrorError` string on the response instead of failing the whole
+request. Mastodon implements both actions (favourite/unfavourite,
+bookmark/unbookmark — genuinely separate Mastodon concepts, confirmed via
+the `masto` SDK's own `.d.ts` files). Bluesky implements only likes
+(`agent.like`/`agent.deleteLike`, confirmed via `@atproto/api`'s `.d.ts`)
+— deliberately no bookmark mirroring, since AT Protocol has no native
+bookmark record type available here; faking one would be dishonest.
+Demo connectors implement neither, so Twitter/Threads/Instagram stay
+local-only. Also fixed `lib/timelineImport.ts`'s upsert to actually
+persist `mirrorRef` — without this the whole feature would be
+unreachable, since every post's ref would stay empty regardless of
+platform. Web: `PostCard`'s like/bookmark now show a distinct
+"Liked here, but couldn't sync to X" toast on a `mirrorError`, instead of
+the generic failure toast (the local action did succeed).
+
+**Found and fixed a real, unrelated, pre-existing bug while
+live-smoke-testing:** `apps/web/lib/api.ts`'s shared `request()` helper
+unconditionally set `Content-Type: application/json` even for calls with
+no body. Fastify's default body parser rejects a zero-length body under
+that content-type (`FST_ERR_CTP_EMPTY_JSON_BODY`) — so every no-body call
+in the entire web app (`like`, `bookmark`, `logout`, `disconnect`,
+`revokeSession`, `logoutAllOtherSessions`, `requestEmailVerification`) has
+apparently been silently 400ing from the real browser client this whole
+campaign, never caught before because no prior session had live-clicked
+one of these specific actions against a real running server (this
+session's own earlier phases tested failure paths by killing the API
+entirely, which produces a *network* error, not a 400 from a live one).
+Fixed by only setting the header when a body is actually being sent.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all green
+(127/127 tests, 7 new in `mirror.test.ts` via injected fake connectors,
+same no-real-credentials pattern as `internal.test.ts`'s tick-worker
+tests). Manual smoke test against a live server: reproduced the
+`Content-Type` bug via `curl` (400 → 200 after the fix), then confirmed
+via a real headless-browser session — with full request/response logging,
+after chasing down one red herring (a `[role="alert"]` toast-detection
+script matched Next.js's own hidden `__next-route-announcer__` element,
+not an application toast) — that liking and bookmarking a demo post now
+round-trip correctly with no spurious failure. Live mirroring to a real
+Mastodon/Bluesky account can't be smoke-tested in this sandbox (no real
+account credentials available) — verified the same way `publish()`
+already was: written against the actual SDK types, covered by the
+injected-fake-connector tests. Reseeded the demo account fresh afterward.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/connectors/types.ts`, `apps/api/src/connectors/mastodon.ts`,
+`apps/api/src/connectors/bluesky.ts`, `apps/api/src/lib/mirror.ts` (new),
+`apps/api/src/lib/timelineImport.ts`, `apps/api/src/routes/feed.ts`,
+`apps/api/src/__tests__/mirror.test.ts` (new), `apps/web/lib/api.ts`,
+`apps/web/components/PostCard.tsx`, `docs/BACKLOG.md`,
+`docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Push and open a new draft PR (the old one merged and its
+branch was deleted by GitHub on merge, so this push recreates the remote
+branch). **Phase F is now fully complete (F1–F6 all DONE).** Phase G
+(Postgres datasource, deploy docs, observability, security pass,
+OPERATOR.md) is the only phase left entirely untouched — next session
+should scope G1 (Postgres datasource + real migrations) first, since the
+rest of Phase G (deploy docs, CSP/CORS hardening, OPERATOR.md) reads
+easier once the production datasource story is settled.
+
 ### 2026-08-27 — Session 6 (Phase F1: real analytics)
 
 **Summary:** PR #6 still open (draft, `mergeable_state: clean`, CI green on
