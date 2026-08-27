@@ -46,6 +46,66 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-27 — Session 4 continued (Phase E5: Instagram as a full demo platform)
+
+**Summary:** PR #6 still open and green. Picked **E5** — the last open
+item in Phase E. Re-scoped it after actually checking the codebase:
+Instagram didn't exist as a platform anywhere (config, demo connector,
+web types), unlike Threads which already had a demo card even though its
+live OAuth (C4) is still `WAITING-ON-HUMAN`. So this was "stand up a new
+platform, demo-only" rather than the one-line char-limit tweak the
+backlog note originally implied.
+
+**What shipped:** Added `instagram` to `apps/api/src/config.ts`'s
+`PLATFORMS` (2200 char limit, brand color, oauth-shaped like Threads),
+`apps/api/src/connectors/demo.ts`'s `AUTHORS`/`SNIPPETS` records,
+`apps/web/lib/types.ts`'s `PlatformId` union, and
+`apps/web/lib/platforms.tsx`'s `PLATFORM_META`/`PLATFORM_ORDER`/
+`ICON_PATHS` (real Instagram brand glyph). Confirmed first that every
+other consumer — the connect UI, feed platform filter, publish char-limit
+validation, demo image/avatar generation — is already generic over
+`PLATFORM_IDS`/`PLATFORM_ORDER`, so nothing else needed to change to get
+a fully working demo platform.
+
+**Found a real bug while smoke-testing:** `apps/api/src/seed.ts`'s
+`DEMO_HANDLES` lookup was typed `Record<string, string>` rather than
+`Record<PlatformId, string>`, so the missing `instagram` key wasn't a
+compile error — it was a runtime crash on `npm run db:setup`
+(`PrismaClientValidationError: Argument handle is missing`). Fixed both
+the immediate gap (added the entry) and the root cause (retyped to
+`Record<PlatformId, string>`, so this class of bug is now a build failure
+instead of a broken `db:setup` the next time a platform is added).
+
+**Commands run:** `npm run lint && npm test && npm run build` — all
+green (117/117 API tests unaffected, since Instagram flows through
+entirely generic code paths). `npm run db:setup` failed once (the seed
+bug above), fixed, then succeeded cleanly (5 platform connections, 40
+feed posts). Manual smoke test against a live server with a real
+headless-browser walkthrough (not just types passing): screenshotted
+`/dashboard/connections` (Instagram card renders with the right icon,
+color, and connects successfully — "Your connections" shows 5) and
+`/dashboard/feed` (Instagram demo posts, including demo images, appear
+correctly in the unified timeline alongside the other four platforms).
+
+**Files touched:** `apps/api/src/config.ts`, `apps/api/src/connectors/demo.ts`,
+`apps/api/src/seed.ts`, `apps/web/lib/types.ts`, `apps/web/lib/platforms.tsx`,
+`docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None. Live Instagram OAuth (real Meta developer app) remains
+parked as `C4`, `WAITING-ON-HUMAN`, unaffected by this slice.
+
+**Next step:** Check PR #6 is still open, commit this in reviewable
+slices, push. Phase E is now fully complete (E1–E6 all `DONE`). Remaining
+open work is entirely Phase F: F1 (analytics — depends on live connectors
+existing, still mostly blocked), F2 (platform-mirrored bookmarks/likes),
+F3 (empty states/toasts — `PostCard` already has optimistic UI w/ rollback
+for like/bookmark, worth a scoping pass before assuming untouched), F5
+(landing page polish). After Phase F, Phase G (production hardening:
+Postgres datasource, deploy docs, observability, security pass, OPERATOR.md)
+is the only phase left untouched. Check the Parked/WAITING-ON-HUMAN
+section of `BACKLOG.md` for any new credentials before picking the next
+phase.
+
 ### 2026-08-26 — Session 4 continued (Phase E4: per-target status UI polish)
 
 **Summary:** PR #6 (Phase E3) still open and green (CI + CodeQL both
