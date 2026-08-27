@@ -102,7 +102,12 @@ async function uploadMedia(file: File, isRetry = false): Promise<{ url: string; 
 async function request<T>(path: string, options: RequestInit = {}, isRetry = false): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    // Only when there's actually a JSON body to describe -- Fastify's
+    // default body parser rejects a zero-length body under this
+    // content-type (FST_ERR_CTP_EMPTY_JSON_BODY), which every no-body call
+    // here (logout, disconnect, revokeSession, like, bookmark, ...) always
+    // sent with an empty body previously, 400ing every one of them.
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -202,10 +207,11 @@ export const api = {
     return request<{ posts: FeedPost[]; nextCursor: string | null }>(`/api/feed${qs ? `?${qs}` : ""}`);
   },
 
-  like: (id: string) => request<{ post: FeedPost }>(`/api/feed/${id}/like`, { method: "POST" }),
+  like: (id: string) =>
+    request<{ post: FeedPost; mirrorError?: string }>(`/api/feed/${id}/like`, { method: "POST" }),
 
   bookmark: (id: string) =>
-    request<{ post: FeedPost }>(`/api/feed/${id}/bookmark`, { method: "POST" }),
+    request<{ post: FeedPost; mirrorError?: string }>(`/api/feed/${id}/bookmark`, { method: "POST" }),
 
   uploadMedia: (file: File) => uploadMedia(file),
 
