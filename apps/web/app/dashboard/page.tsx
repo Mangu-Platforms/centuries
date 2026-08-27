@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import type { DashboardData, PublishHistoryItem } from "@/lib/types";
 import { PLATFORM_META, PlatformGlyph } from "@/lib/platforms";
+import { useToast } from "@/lib/toast";
 
 const STAT_STYLES: Record<string, { iconBg: string; icon: React.ReactNode }> = {
   platforms: {
@@ -59,10 +60,12 @@ function Stat({ label, value, kind }: { label: string; value: string | number; k
 export default function DashboardOverview() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
+  const { showToast } = useToast();
 
   useEffect(() => {
-    api.dashboard().then(setData).catch(() => {});
-    api.history().then((r) => setHistory(r.jobs)).catch(() => {});
+    api.dashboard().then(setData).catch(() => showToast("Couldn't load your overview. Try refreshing."));
+    api.history().then((r) => setHistory(r.jobs)).catch(() => showToast("Couldn't load publish history."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!data) return <p className="text-slate-400">Loading overview…</p>;
