@@ -29,9 +29,12 @@ export function clearToken(): void {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** The parsed error response body, for callers that need more than the message (e.g. 423's retryAfterSeconds). */
+  details?: unknown;
+  constructor(message: string, status: number, details?: unknown) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -126,7 +129,7 @@ async function request<T>(path: string, options: RequestInit = {}, isRetry = fal
 
   if (!res.ok) {
     const message = (body && (body.error || body.message)) || `Request failed (${res.status})`;
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, body);
   }
   return body as T;
 }
