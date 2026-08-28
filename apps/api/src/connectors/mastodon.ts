@@ -3,7 +3,7 @@ import sanitizeHtml from "sanitize-html";
 import { PLATFORMS } from "../config.js";
 import { avatarFor } from "./demo.js";
 import { registerLiveConnector } from "./registry.js";
-import type { ConnectionContext, PlatformConnector, PublishResult, RemotePost } from "./types.js";
+import type { ConnectionContext, MirrorRef, PlatformConnector, PublishResult, RemotePost } from "./types.js";
 
 // Mastodon OAuth 2.0 against a user-supplied instance — Phase C2. Unlike
 // X/Threads/Instagram, this needs no pre-registered developer app: NEXUS
@@ -120,6 +120,9 @@ class MastodonConnector implements PlatformConnector {
         repostCount: status.reblogsCount,
         replyCount: status.repliesCount,
         postedAt: new Date(status.createdAt),
+        // The status's own numeric/opaque id, not its ActivityPub `uri`
+        // (stored as externalId) -- favourite/bookmark are addressed by id.
+        mirrorRef: status.id,
       };
     });
   }
@@ -131,6 +134,25 @@ class MastodonConnector implements PlatformConnector {
     const client = createRestAPIClient({ url: instanceUrl, accessToken });
     const status = await client.v1.statuses.create({ status: content });
     return { externalId: status.uri, latencyMs: Date.now() - start };
+  }
+
+  async setLiked(ctx: ConnectionContext, ref: MirrorRef, liked: boolean): Promise<void> {
+    const { instanceUrl, accessToken } = requireContext(ctx);
+    const client = createRestAPIClient({ url: instanceUrl, accessToken });
+    const status = client.v1.statuses.$select(ref.mirrorRef);
+    if (liked) await status.favourite();
+    else await status.unfavourite();
+  }
+
+  // Mastodon's bookmark is a genuinely separate concept from favourite
+  // (a private save, invisible to the author -- unlike a favourite/like),
+  // and the API exposes it as its own pair of endpoints.
+  async setBookmarked(ctx: ConnectionContext, ref: MirrorRef, bookmarked: boolean): Promise<void> {
+    const { instanceUrl, accessToken } = requireContext(ctx);
+    const client = createRestAPIClient({ url: instanceUrl, accessToken });
+    const status = client.v1.statuses.$select(ref.mirrorRef);
+    if (bookmarked) await status.bookmark();
+    else await status.unbookmark();
   }
 }
 

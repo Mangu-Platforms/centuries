@@ -1,9 +1,26 @@
 import process from "node:process";
 
+// Phase G4: every access token this API ever issues is signed with this
+// secret (see plugins/auth.ts) -- unlike DATA_KEY (lib/crypto.ts) and
+// CRON_SECRET (routes/internal.ts), which already refuse an insecure
+// default in production, JWT_SECRET previously fell back to a hardcoded,
+// repo-visible string unconditionally. A production deploy that forgot to
+// set it would boot successfully and silently sign every token with a
+// secret anyone can read in this codebase's history -- forgeable auth for
+// any account. Fail fast at boot instead, matching the other two secrets'
+// existing behavior.
+function resolveJwtSecret(): string {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET must be set in production. Generate one with `openssl rand -base64 48`.");
+  }
+  return "dev-super-secret-change-me";
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   host: process.env.HOST ?? "0.0.0.0",
-  jwtSecret: process.env.JWT_SECRET ?? "dev-super-secret-change-me",
+  jwtSecret: resolveJwtSecret(),
   corsOrigin: (process.env.CORS_ORIGIN ?? "http://localhost:3000")
     .split(",")
     .map((s) => s.trim())

@@ -46,6 +46,340 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-28 — Session 11 (Phase G2: harden Railway/Vercel docs, preview deploys)
+
+**Summary:** PR #7 still open, draft, `mergeable_state: clean` — nothing
+needed there this cycle. Picked **G2**, per Session 10's own "Next step"
+recommendation. Docs-only slice.
+
+**What shipped:**
+- Fixed a real, concrete bug in `DEPLOY.md`: its closing "Next after
+  deploy" section still listed Bluesky connector / OAuth / auth
+  hardening as upcoming work — leftover from the very first version of
+  this doc, written before Phase A even started, never updated across
+  the seven phases since. Replaced with a "Campaign status" section
+  pointing at `docs/BACKLOG.md`/`docs/CAMPAIGN.md` as the one place
+  this campaign keeps authoritative, so the doc can't silently go stale
+  the same way again.
+- Added the actually-requested "Preview deploys" section: how Vercel's
+  GitHub integration auto-creates a preview URL and status comment per
+  PR (already observed live on this campaign's own PRs this session),
+  and how Railway's opt-in "PR Environments" feature works. Documented
+  the real operational gotcha that Phase G4's exact-match `CORS_ORIGIN`
+  allowlist needs each preview web origin added explicitly, since it's
+  deliberately not a wildcard.
+
+**Found and flagged, not fixed:** the Vercel preview deployments
+actually observed on this session's own PR are for a project named
+`centuries-api` with **Root Directory** `apps/api` — targeting the
+Fastify *API*, not the web app `DEPLOY.md`'s Step 3 describes deploying
+to Vercel. Nothing in this repo created that project (no `vercel.json`
+anywhere) — it was configured directly in the Vercel dashboard, outside
+this codebase. A Fastify app calling `app.listen()` doesn't run as-is on
+Vercel's serverless model without an adapter. Documented this as a flag
+for a human to confirm intent on, rather than guessing and rewriting the
+documented architecture (API on Railway, web on Vercel) to match an
+out-of-band dashboard config that might just be an experiment.
+
+**Verified:** `npm run lint && npm test && npm run build` all green
+(134/134, unaffected as expected for a docs-only change).
+
+**Commands run:** `npm run lint`, `npm test` (134/134), `npm run build`.
+
+**Files touched:** `DEPLOY.md`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None — the Vercel-project discrepancy above is flagged for
+a human, not blocking any further backlog work.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase
+G items: G5 (improve autonomous_agent.py — last priority, product over
+agent), G6 (OPERATOR.md — how to run, env matrix, add a fifth platform;
+also the campaign's own close-out signal once every other item is DONE).
+G6 is the natural next pick — every other Phase A–G item will be DONE
+once G2 lands, and G6 is explicitly the close-out signal.
+
+### 2026-08-27 — Session 10 (Phase G3: observability — metrics, error reporting hook, log redaction)
+
+**Summary:** PR #7 still open, draft, `mergeable_state: clean` — nothing
+needed there this cycle. Picked **G3**, per Session 9's own "Next step"
+recommendation. Scoped it by reading the actual logging setup first:
+structured pino request logs (request-id-correlated) already existed
+since Phase A6, so the genuine gaps were metrics and an error-reporting
+hook, not logging itself.
+
+**What shipped:**
+- **Metrics.** New `apps/api/src/lib/metrics.ts`: an in-process `Map` of
+  per-`method+route` counters (request count, 5xx error count, summed
+  duration), fed by a new `onResponse` hook and rendered as hand-rolled
+  Prometheus text exposition format at a new `GET /metrics`. Deliberately
+  no `prom-client` dependency — three counters per route doesn't justify
+  a full metrics library. Uses `request.routeOptions.url` (the registered
+  route *pattern*) rather than the literal path, so a 404 on a garbage
+  URL can't create unbounded label cardinality — bucketed as
+  `route="unmatched"` instead.
+- **Error reporting hook.** Extracted the one `request.log.error(...)`
+  call in the global error handler into a named `reportError()` in new
+  `apps/api/src/lib/errorReporting.ts`. Still just pino logging today,
+  but it's now a single seam for wiring in a real error-tracking service
+  later via an env var — same split as `EmailProvider`/`MediaStorage`.
+- **Log redaction.** Added pino `redact` paths (auth header, cookie
+  header, password/token/accessToken/refreshToken fields) as defense in
+  depth. Confirmed by reading the actual log shape that nothing currently
+  logs a header or body, so this guards a *future* leak, not a current
+  one.
+
+**Verified live, not just types passing:** `npm run lint && npm test &&
+npm run build` all green (134/134 tests, 7 new). Started a real server:
+`curl`-confirmed `/metrics` reflects real traffic (two `/health` calls, a
+login, a 404) with correct counts/labels/`content-type`; confirmed the
+demo account still logs in with the new pino `redact` config active (an
+invalid redact path throws at Fastify construction — it didn't); confirmed
+via the server's own log output that requests still log normally.
+
+**Commands run:** `npm run lint`, `npm test` (134/134), `npm run build`;
+live smoke test via `curl` against a running dev server as described
+above.
+
+**Files touched:** `apps/api/src/app.ts`, `apps/api/src/lib/metrics.ts`
+(new), `apps/api/src/lib/errorReporting.ts` (new),
+`apps/api/src/__tests__/metrics.test.ts` (new),
+`apps/api/src/__tests__/errorReporting.test.ts` (new),
+`docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase G
+items: G2 (harden Railway/Vercel docs, preview deploys), G5 (improve
+autonomous_agent.py — last priority, product over agent), G6
+(OPERATOR.md — how to run, env matrix, add a fifth platform; also the
+campaign's own close-out signal once every other item is DONE). G2 is a
+reasonable next pick — self-contained, and pairs naturally with G1's
+Postgres work already done.
+
+### 2026-08-27 — Session 9 (Phase G4: security pass — CSP, CORS audit, secret hygiene)
+
+**Summary:** PR #7 (Phase F close-out) still open, draft, `mergeable_state:
+clean` — nothing needed there this cycle. Picked **G4**, per Session 8's
+own "Next step" recommendation (self-contained, doesn't depend on G2/G3,
+directly matters for a real deploy). Scoped it by reading the actual code
+in `config.ts`/`app.ts` rather than assuming what was missing.
+
+**What shipped, three parts:**
+- **Secret hygiene.** `DATA_KEY` and `CRON_SECRET` already refused to boot
+  with an insecure default in production; `JWT_SECRET` didn't — it fell
+  back to a hardcoded, repo-visible string unconditionally, which in a
+  real prod deploy that forgot to set it would mean every access token
+  this API issues is signed with a secret anyone can read in this
+  codebase's git history. Fixed with `resolveJwtSecret()` in `config.ts`:
+  throws synchronously at boot when `NODE_ENV === "production"` and
+  `JWT_SECRET` is unset, matching the other two secrets' existing pattern
+  exactly. Verified manually via three direct `node
+  --experimental-strip-types` invocations (prod+unset throws with the
+  intended message, prod+set returns the set value, dev returns the
+  fallback) — same verification style already used for `DATA_KEY`/
+  `CRON_SECRET`, since this is a boot-time guard with no natural unit-test
+  seam. `.env.example`'s `JWT_SECRET` comment updated to document the new
+  prod-required behavior.
+- **CSP + security headers.** Added `@fastify/helmet`, registered in
+  `app.ts` right after CORS. Identified and pre-empted a real risk before
+  it could break anything: helmet's default `crossOriginResourcePolicy:
+  "same-origin"` would make browsers silently refuse `GET /uploads/:key`
+  (E3's media route), which is deliberately fetched cross-origin as a
+  plain `<img src>` by the separately-hosted web app — overridden to
+  `{ policy: "cross-origin" }` before ever registering helmet, not as a
+  reactive fix.
+- **CORS audit.** Read `config.ts`'s `corsOrigin` parsing — already an
+  exact-match array (`CORS_ORIGIN` split on commas, trimmed, passed
+  straight to `@fastify/cors`'s `origin` option), no wildcard/regex
+  anywhere. No code change needed; documented the confirmation in
+  `docs/BACKLOG.md` instead of silently doing nothing.
+
+**Verified end-to-end against a live server, not just "types compile":**
+`npm run lint && npm test && npm run build` all green (127/127 tests,
+unchanged count). Confirmed via `curl` that `Cross-Origin-Resource-Policy:
+cross-origin` is actually present on live API responses. Then — since the
+D4 demo images render via inline `data:` URIs and don't exercise CORP at
+all — the one path that actually does: a real headless-browser session
+logged in as the demo account, opened the composer, uploaded a genuine
+4×4 PNG through the real file input (a real `POST /api/media/upload`, not
+mocked), and confirmed the resulting `<img
+src="http://localhost:4000/uploads/...">` — served cross-origin from the
+API's own origin — actually rendered (`naturalWidth` matched the real
+file) with helmet active, zero CSP/CORP console errors. Cleaned up the
+test upload artifact from `apps/api/uploads/` afterward.
+
+**Commands run (all green):** `npm run lint`, `npm test` (127/127),
+`npm run build`; live smoke test as described above via a headless
+Chromium session against both dev servers running locally.
+
+**Files touched:** `apps/api/src/config.ts`, `apps/api/src/app.ts`,
+`apps/api/package.json` (+`package-lock.json`, `@fastify/helmet` added),
+`apps/api/.env.example`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase G
+items: G2 (harden Railway/Vercel docs, preview deploys), G3 (observability
+— pino logs, metrics, error reporting hook), G5 (improve
+autonomous_agent.py — last priority, product over agent), G6 (OPERATOR.md
+— how to run, env matrix, add a fifth platform; also the campaign's own
+close-out signal once every other item is DONE). G3 (observability) is a
+reasonable next pick — self-contained, and pino structured logging is
+already half-present via `app.ts`'s existing logger config, so it's a
+natural extension rather than new ground.
+
+### 2026-08-27 — Session 8 (Phase G1: Postgres datasource + real migrations)
+
+**Summary:** PR #7 (Phase F1+F2 close-out) still open, green, mergeable —
+nothing needed there this cycle. Picked **G1**, the first Phase G item and
+the one this log's own last "Next step" flagged as the natural starting
+point, since the rest of Phase G (deploy docs, CSP/CORS hardening,
+OPERATOR.md) reads easier once the production datasource story is settled.
+
+**What shipped:** Prisma can't switch a single schema's `provider` field
+based on an env var — it's a literal string, checked at generate time —
+so supporting SQLite for zero-setup local dev (this campaign's whole
+philosophy) *and* durable Postgres in production simultaneously needs two
+schema files. Two hand-maintained copies would drift the first time a
+model changed in one and not the other, so this uses generation instead
+of duplication: `schema.prisma` (SQLite) stays the single source of truth
+for every model; a new script, `db:generate-prod-schema`, derives
+`schema.production.prisma` from it by swapping only the datasource block.
+New `db:migrate:dev`/`db:migrate:deploy` scripts run real tracked Prisma
+migrations (`prisma/migrations/`) against the generated schema for
+Postgres, while SQLite dev keeps its existing zero-ceremony `db push`.
+
+**Verified against a genuine Postgres server, not just types passing:**
+this sandbox turned out to have `postgresql-16` actually installed (just
+not running) — started it, created a scratch role/database, generated the
+real initial migration (`migrate dev --create-only`, hand-reviewed the
+SQL for every model/index/FK), applied it via `migrate deploy` to a fresh
+empty database (the exact command a production deploy runs), and ran the
+**full 127-test suite green against real Postgres**, zero code changes
+needed outside `prisma/`. Also smoke-tested a live server against it —
+seeded the demo account, exercised login, feed pagination, the F1
+analytics endpoint, and a real F2 mirrored-like request, all correct.
+Cleaned up the temporary Postgres role/database/server afterward,
+restored `.env` to SQLite, regenerated the SQLite client, and re-ran the
+full suite to confirm the normal dev path is completely unaffected.
+
+**Also:** the new script lives in `apps/api/scripts/` (outside `src/`,
+which `tsconfig.json`'s `rootDir` deliberately excludes from the build),
+so it wasn't being typechecked by `npm run lint` at all — added
+`tsconfig.scripts.json` and a second `tsc` step so it is. Updated
+`DEPLOY.md`'s old "hand-edit the schema, redeploy" instructions with the
+real flow. Deliberately left `railway.json`'s actual start command
+untouched — flipping it now, before a human provisions real Postgres and
+sets `DATABASE_URL` in lockstep, would break the currently-deployed
+SQLite-on-a-volume service on its very next deploy.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all green
+(127/127, unchanged count — this phase touched no application code, only
+`prisma/`, `scripts/`, and docs). See above for the live-Postgres
+verification, which isn't part of the normal CI-mirrored command sequence
+since no Postgres is available in CI.
+
+**Files touched:** `apps/api/prisma/schema.prisma` (header comment only),
+`apps/api/prisma/schema.production.prisma` (new, generated),
+`apps/api/prisma/migrations/20260827124944_init/migration.sql` (new),
+`apps/api/scripts/generateProductionSchema.ts` (new),
+`apps/api/tsconfig.scripts.json` (new), `apps/api/package.json`,
+`DEPLOY.md`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase G
+items: G2 (harden Railway/Vercel docs, preview deploys), G3 (observability
+— pino logs, metrics, error reporting hook), G4 (security pass — CSP,
+exact CORS origins, secret hygiene), G5 (improve autonomous_agent.py —
+last priority, product over agent), G6 (OPERATOR.md — how to run, env
+matrix, add a fifth platform; also the campaign's own close-out signal
+once every other item is DONE). G4 (security) is a reasonable next pick —
+it's self-contained, doesn't depend on G2/G3, and directly matters for a
+real deploy.
+
+### 2026-08-27 — Session 7 (Phase F2: mirrored likes/bookmarks — Phase F complete)
+
+**Summary:** PR #6 (Phase E3 → F1) was merged by a human while this session
+was mid-check-in. Per this repo's "a merged PR is finished, restart the
+branch" convention: confirmed the branch's prior head
+(`5caabd8`) was an ancestor of the new default branch
+(`autonomous-agent-setup-6249396920522474145`, now at `e6db93d`), fast-
+forwarded onto it (no rebase needed), and picked up **F2** as fresh
+follow-up work — the last open item in Phase F, and the "bigger lift" this
+log already flagged it as.
+
+**What shipped:** `PlatformConnector` gained optional `setLiked`/
+`setBookmarked` methods; `FeedPost` gained `mirrorRef` (a connector-opaque
+reference to the real post -- a Mastodon status id, or a Bluesky
+`{uri,cid}` pair as JSON) and `likeMirrorRef` (Bluesky-only: the created
+like record's own URI, needed to delete it again on unlike). New
+`apps/api/src/lib/mirror.ts` resolves the connector + decrypted
+credentials and attempts the mirror, but **never throws** — a mirror
+failure still lets the local like/bookmark succeed, surfaced as a
+`mirrorError` string on the response instead of failing the whole
+request. Mastodon implements both actions (favourite/unfavourite,
+bookmark/unbookmark — genuinely separate Mastodon concepts, confirmed via
+the `masto` SDK's own `.d.ts` files). Bluesky implements only likes
+(`agent.like`/`agent.deleteLike`, confirmed via `@atproto/api`'s `.d.ts`)
+— deliberately no bookmark mirroring, since AT Protocol has no native
+bookmark record type available here; faking one would be dishonest.
+Demo connectors implement neither, so Twitter/Threads/Instagram stay
+local-only. Also fixed `lib/timelineImport.ts`'s upsert to actually
+persist `mirrorRef` — without this the whole feature would be
+unreachable, since every post's ref would stay empty regardless of
+platform. Web: `PostCard`'s like/bookmark now show a distinct
+"Liked here, but couldn't sync to X" toast on a `mirrorError`, instead of
+the generic failure toast (the local action did succeed).
+
+**Found and fixed a real, unrelated, pre-existing bug while
+live-smoke-testing:** `apps/web/lib/api.ts`'s shared `request()` helper
+unconditionally set `Content-Type: application/json` even for calls with
+no body. Fastify's default body parser rejects a zero-length body under
+that content-type (`FST_ERR_CTP_EMPTY_JSON_BODY`) — so every no-body call
+in the entire web app (`like`, `bookmark`, `logout`, `disconnect`,
+`revokeSession`, `logoutAllOtherSessions`, `requestEmailVerification`) has
+apparently been silently 400ing from the real browser client this whole
+campaign, never caught before because no prior session had live-clicked
+one of these specific actions against a real running server (this
+session's own earlier phases tested failure paths by killing the API
+entirely, which produces a *network* error, not a 400 from a live one).
+Fixed by only setting the header when a body is actually being sent.
+
+**Commands run:** `npm run lint && npm test && npm run build` — all green
+(127/127 tests, 7 new in `mirror.test.ts` via injected fake connectors,
+same no-real-credentials pattern as `internal.test.ts`'s tick-worker
+tests). Manual smoke test against a live server: reproduced the
+`Content-Type` bug via `curl` (400 → 200 after the fix), then confirmed
+via a real headless-browser session — with full request/response logging,
+after chasing down one red herring (a `[role="alert"]` toast-detection
+script matched Next.js's own hidden `__next-route-announcer__` element,
+not an application toast) — that liking and bookmarking a demo post now
+round-trip correctly with no spurious failure. Live mirroring to a real
+Mastodon/Bluesky account can't be smoke-tested in this sandbox (no real
+account credentials available) — verified the same way `publish()`
+already was: written against the actual SDK types, covered by the
+injected-fake-connector tests. Reseeded the demo account fresh afterward.
+
+**Files touched:** `apps/api/prisma/schema.prisma`,
+`apps/api/src/connectors/types.ts`, `apps/api/src/connectors/mastodon.ts`,
+`apps/api/src/connectors/bluesky.ts`, `apps/api/src/lib/mirror.ts` (new),
+`apps/api/src/lib/timelineImport.ts`, `apps/api/src/routes/feed.ts`,
+`apps/api/src/__tests__/mirror.test.ts` (new), `apps/web/lib/api.ts`,
+`apps/web/components/PostCard.tsx`, `docs/BACKLOG.md`,
+`docs/CAMPAIGN.md`.
+
+**Blockers:** None.
+
+**Next step:** Push and open a new draft PR (the old one merged and its
+branch was deleted by GitHub on merge, so this push recreates the remote
+branch). **Phase F is now fully complete (F1–F6 all DONE).** Phase G
+(Postgres datasource, deploy docs, observability, security pass,
+OPERATOR.md) is the only phase left entirely untouched — next session
+should scope G1 (Postgres datasource + real migrations) first, since the
+rest of Phase G (deploy docs, CSP/CORS hardening, OPERATOR.md) reads
+easier once the production datasource story is settled.
+
 ### 2026-08-27 — Session 6 (Phase F1: real analytics)
 
 **Summary:** PR #6 still open (draft, `mergeable_state: clean`, CI green on

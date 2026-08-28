@@ -84,14 +84,97 @@ Back in Railway, set `CORS_ORIGIN` to your Vercel URL (e.g. `https://nexus-web.v
 
 ## Later: graduating from SQLite
 
-When you're ready for Postgres (Supabase or Railway's own):
-1. `apps/api/prisma/schema.prisma` → change `provider = "sqlite"` to `provider = "postgresql"`
-2. Set `DATABASE_URL` to the Postgres connection string
-3. Run `npm run -w @nexus/api prisma:generate`, commit, redeploy
-4. The volume can then be removed
+Postgres support (Phase G1) already exists on this branch — you don't need
+to hand-edit the schema. `apps/api/prisma/schema.prisma` (SQLite) stays the
+single source of truth for every model; `apps/api/prisma/schema.production.prisma`
+is a **generated** file (`npm run -w @nexus/api db:generate-prod-schema`)
+that's identical except for the datasource, so the two can never drift
+apart. Tracked migrations for Postgres live in `apps/api/prisma/migrations/`.
 
-## Next after deploy (from the handoff doc)
+When you're ready for Postgres (Supabase, Railway's own, or any Postgres 15+):
 
-1. **Bluesky connector first** — app-password auth via `@atproto/api`, no OAuth app approval needed. Implement `PlatformConnector` in `apps/api/src/connectors/`
-2. Twitter/Mastodon/Threads OAuth (each needs a developer app)
-3. Auth hardening: email verification, password reset, refresh tokens
+1. Provision a Postgres database and get its connection string.
+2. Set `DATABASE_URL` on the Railway service to that connection string
+   (instead of `file:/data/nexus.db`).
+3. Change the service's **start command** from `prisma db push && node dist/server.js`
+   (or whatever `railway.json` currently runs) to:
+   ```
+   npm run -w @nexus/api db:migrate:deploy && node apps/api/dist/server.js
+   ```
+   `db:migrate:deploy` regenerates `schema.production.prisma` from
+   `schema.prisma` (so it can never be stale) and then runs
+   `prisma migrate deploy` — applies every pending tracked migration,
+   idempotently, the same command every deploy. Unlike `db push`, this
+   keeps a real migration history instead of silently diffing the live
+   schema on every boot.
+4. Redeploy. The volume can then be removed — Postgres is durable storage,
+   unlike SQLite-on-a-volume.
+
+**Authoring a new migration** (only needed when you change a model in
+`schema.prisma`): with a real Postgres reachable locally (e.g. `docker run
+-p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16`), run
+`DATABASE_URL=postgresql://... npm run -w @nexus/api db:migrate:dev` —
+this regenerates the production schema, diffs it against the target
+database, and writes a new timestamped folder under
+`apps/api/prisma/migrations/`. Commit the new migration folder alongside
+the `schema.prisma` change that prompted it. Verified end-to-end in this
+session against a real local PostgreSQL 16 instance: generated the initial
+migration, applied it via `migrate deploy` to a fresh empty database, and
+ran the full 127-test suite (and a live server smoke test — login, feed,
+analytics, like) against it with no code changes needed anywhere outside
+`prisma/`.
+
+## Preview deploys
+
+Both platforms can spin up an isolated environment per pull request, useful
+for reviewing a change before it merges without touching production.
+
+**Vercel** does this automatically once the GitHub integration is installed
+on the repo (Project Settings → Git) — every push to a PR branch gets its
+own preview URL and deployment status comment, no extra config needed. This
+is already active on this repo: `centuries-api-git-<branch>-*.vercel.app`
+preview URLs and `[vc]` status comments have appeared on this campaign's
+PRs. **Important caveat found while writing this section**: that Vercel
+project is named `centuries-api` with **Root Directory** set to `apps/api`
+— i.e. it appears to target the *Fastify API*, not the web app this
+document describes deploying to Vercel (Step 3, root directory `apps/web`).
+Nothing in this repo's committed config (no `vercel.json` anywhere) created
+that project; it was set up directly in the Vercel dashboard, outside this
+codebase, by whoever owns that Vercel account. A Fastify app that calls
+`app.listen()` doesn't run as-is on Vercel's serverless model without an
+adapter, so **a human should confirm what that `centuries-api` Vercel
+project is actually for** (an experiment? a serverless port attempt? a
+misconfigured web-app project?) before treating it as part of the real
+deploy story — this doc's Step 2/Step 3 split (API on Railway, web on
+Vercel) remains the only architecture this codebase's own config
+(`railway.json`, this file) actually supports today.
+
+For the **web app's** own preview deploys (the ones this doc's Step 3
+actually sets up) to reach a real API, either point `NEXT_PUBLIC_API_URL`
+at your always-on Railway production API (previews then share the one
+backend — simplest, and fine as long as a preview's schema changes stay
+backward compatible), or stand up a second Railway service on a preview
+branch. Either way, remember `CORS_ORIGIN` (Phase G4's exact-match
+allowlist, deliberately not a wildcard) needs every preview web origin you
+actually want to hit the API added to it — a preview pointed at production
+without a matching `CORS_ORIGIN` entry will fail every API call with a CORS
+error, not a helpful one.
+
+**Railway** supports PR Environments (Project Settings → Environments →
+enable "PR Environments") — an opt-in feature that provisions an ephemeral
+copy of the service (and, if configured, a fresh database) per open PR,
+torn down when the PR closes. It is off by default and not currently
+enabled for this project; enabling it is a deliberate choice for whoever
+owns the Railway project, since it multiplies compute cost by however many
+PRs are open at once — reasonable for a small team, worth a second look at
+higher PR volume.
+
+## Campaign status
+
+Every phase (A–G) of the 1242-hour NEXUS build campaign's backlog is
+tracked live in `docs/BACKLOG.md`; `docs/CAMPAIGN.md` has the full session
+log. As of this writing: Phases A–F and G1/G3/G4 are DONE; G2 (this file),
+G5 (agent tooling, lowest priority), and G6 (OPERATOR.md) are what remains.
+Do not treat any older "what's next" list in this file as current — check
+`docs/BACKLOG.md` instead, since it's the one place this campaign keeps
+authoritative.
