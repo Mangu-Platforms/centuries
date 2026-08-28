@@ -124,8 +124,57 @@ ran the full 127-test suite (and a live server smoke test — login, feed,
 analytics, like) against it with no code changes needed anywhere outside
 `prisma/`.
 
-## Next after deploy (from the handoff doc)
+## Preview deploys
 
-1. **Bluesky connector first** — app-password auth via `@atproto/api`, no OAuth app approval needed. Implement `PlatformConnector` in `apps/api/src/connectors/`
-2. Twitter/Mastodon/Threads OAuth (each needs a developer app)
-3. Auth hardening: email verification, password reset, refresh tokens
+Both platforms can spin up an isolated environment per pull request, useful
+for reviewing a change before it merges without touching production.
+
+**Vercel** does this automatically once the GitHub integration is installed
+on the repo (Project Settings → Git) — every push to a PR branch gets its
+own preview URL and deployment status comment, no extra config needed. This
+is already active on this repo: `centuries-api-git-<branch>-*.vercel.app`
+preview URLs and `[vc]` status comments have appeared on this campaign's
+PRs. **Important caveat found while writing this section**: that Vercel
+project is named `centuries-api` with **Root Directory** set to `apps/api`
+— i.e. it appears to target the *Fastify API*, not the web app this
+document describes deploying to Vercel (Step 3, root directory `apps/web`).
+Nothing in this repo's committed config (no `vercel.json` anywhere) created
+that project; it was set up directly in the Vercel dashboard, outside this
+codebase, by whoever owns that Vercel account. A Fastify app that calls
+`app.listen()` doesn't run as-is on Vercel's serverless model without an
+adapter, so **a human should confirm what that `centuries-api` Vercel
+project is actually for** (an experiment? a serverless port attempt? a
+misconfigured web-app project?) before treating it as part of the real
+deploy story — this doc's Step 2/Step 3 split (API on Railway, web on
+Vercel) remains the only architecture this codebase's own config
+(`railway.json`, this file) actually supports today.
+
+For the **web app's** own preview deploys (the ones this doc's Step 3
+actually sets up) to reach a real API, either point `NEXT_PUBLIC_API_URL`
+at your always-on Railway production API (previews then share the one
+backend — simplest, and fine as long as a preview's schema changes stay
+backward compatible), or stand up a second Railway service on a preview
+branch. Either way, remember `CORS_ORIGIN` (Phase G4's exact-match
+allowlist, deliberately not a wildcard) needs every preview web origin you
+actually want to hit the API added to it — a preview pointed at production
+without a matching `CORS_ORIGIN` entry will fail every API call with a CORS
+error, not a helpful one.
+
+**Railway** supports PR Environments (Project Settings → Environments →
+enable "PR Environments") — an opt-in feature that provisions an ephemeral
+copy of the service (and, if configured, a fresh database) per open PR,
+torn down when the PR closes. It is off by default and not currently
+enabled for this project; enabling it is a deliberate choice for whoever
+owns the Railway project, since it multiplies compute cost by however many
+PRs are open at once — reasonable for a small team, worth a second look at
+higher PR volume.
+
+## Campaign status
+
+Every phase (A–G) of the 1242-hour NEXUS build campaign's backlog is
+tracked live in `docs/BACKLOG.md`; `docs/CAMPAIGN.md` has the full session
+log. As of this writing: Phases A–F and G1/G3/G4 are DONE; G2 (this file),
+G5 (agent tooling, lowest priority), and G6 (OPERATOR.md) are what remains.
+Do not treat any older "what's next" list in this file as current — check
+`docs/BACKLOG.md` instead, since it's the one place this campaign keeps
+authoritative.

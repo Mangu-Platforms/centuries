@@ -46,6 +46,58 @@ test or visible UI change.
 
 ## Session log
 
+### 2026-08-28 — Session 11 (Phase G2: harden Railway/Vercel docs, preview deploys)
+
+**Summary:** PR #7 still open, draft, `mergeable_state: clean` — nothing
+needed there this cycle. Picked **G2**, per Session 10's own "Next step"
+recommendation. Docs-only slice.
+
+**What shipped:**
+- Fixed a real, concrete bug in `DEPLOY.md`: its closing "Next after
+  deploy" section still listed Bluesky connector / OAuth / auth
+  hardening as upcoming work — leftover from the very first version of
+  this doc, written before Phase A even started, never updated across
+  the seven phases since. Replaced with a "Campaign status" section
+  pointing at `docs/BACKLOG.md`/`docs/CAMPAIGN.md` as the one place
+  this campaign keeps authoritative, so the doc can't silently go stale
+  the same way again.
+- Added the actually-requested "Preview deploys" section: how Vercel's
+  GitHub integration auto-creates a preview URL and status comment per
+  PR (already observed live on this campaign's own PRs this session),
+  and how Railway's opt-in "PR Environments" feature works. Documented
+  the real operational gotcha that Phase G4's exact-match `CORS_ORIGIN`
+  allowlist needs each preview web origin added explicitly, since it's
+  deliberately not a wildcard.
+
+**Found and flagged, not fixed:** the Vercel preview deployments
+actually observed on this session's own PR are for a project named
+`centuries-api` with **Root Directory** `apps/api` — targeting the
+Fastify *API*, not the web app `DEPLOY.md`'s Step 3 describes deploying
+to Vercel. Nothing in this repo created that project (no `vercel.json`
+anywhere) — it was configured directly in the Vercel dashboard, outside
+this codebase. A Fastify app calling `app.listen()` doesn't run as-is on
+Vercel's serverless model without an adapter. Documented this as a flag
+for a human to confirm intent on, rather than guessing and rewriting the
+documented architecture (API on Railway, web on Vercel) to match an
+out-of-band dashboard config that might just be an experiment.
+
+**Verified:** `npm run lint && npm test && npm run build` all green
+(134/134, unaffected as expected for a docs-only change).
+
+**Commands run:** `npm run lint`, `npm test` (134/134), `npm run build`.
+
+**Files touched:** `DEPLOY.md`, `docs/BACKLOG.md`, `docs/CAMPAIGN.md`.
+
+**Blockers:** None — the Vercel-project discrepancy above is flagged for
+a human, not blocking any further backlog work.
+
+**Next step:** Check PR #7 is still open, commit, push. Remaining Phase
+G items: G5 (improve autonomous_agent.py — last priority, product over
+agent), G6 (OPERATOR.md — how to run, env matrix, add a fifth platform;
+also the campaign's own close-out signal once every other item is DONE).
+G6 is the natural next pick — every other Phase A–G item will be DONE
+once G2 lands, and G6 is explicitly the close-out signal.
+
 ### 2026-08-27 — Session 10 (Phase G3: observability — metrics, error reporting hook, log redaction)
 
 **Summary:** PR #7 still open, draft, `mergeable_state: clean` — nothing
